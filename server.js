@@ -1,6 +1,7 @@
-// server.js  (FULL REPLACEMENT)
-// ✅ Includes: /login + /dashboard + /heartbeat + /devices + /api/command + /api/command/:device_id
-// ✅ Modification: DISABLE SEND when selected device is OFFLINE
+// server.js (FULL REPLACEMENT)
+// ✅ FIX: login failing because form fields were not being read correctly in some setups
+// ✅ Uses express.urlencoded globally + reads req.body safely
+// ✅ Credentials: admin / admin1234
 
 const express = require("express");
 const cors = require("cors");
@@ -8,13 +9,19 @@ const mongoose = require("mongoose");
 
 const app = express();
 app.use(cors());
+
+// ✅ IMPORTANT: parse both JSON and FORM
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ✅ serve public/image.png as /image.png
 app.use(express.static("public"));
 
 // ======================
 // DATABASE
 // ======================
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("MongoDB Connected ✅"))
@@ -45,7 +52,7 @@ const commandSchema = new mongoose.Schema({
 const Command = mongoose.model("Command", commandSchema);
 
 // ======================
-// SIMPLE LOGIN
+// SIMPLE LOGIN (cookie)
 // ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "admin1234";
@@ -63,6 +70,7 @@ function parseCookies(req) {
     return acc;
   }, {});
 }
+
 function requireAuth(req, res, next) {
   const c = parseCookies(req);
   if (c.auth === "1") return next();
@@ -75,36 +83,68 @@ function requireAuth(req, res, next) {
 app.get("/", (req, res) => res.send("Server Running ✅"));
 
 // ======================
-// LOGIN
+// LOGIN PAGE
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
-<html><head>
+<html>
+<head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Login • Arcadis Monitor</title>
 <style>
-  :root{--bg1:#0b1423;--bg2:#081a2c;--card:rgba(255,255,255,.08);--stroke:rgba(255,255,255,.14);
-        --txt:#eaf2ff;--muted:rgba(234,242,255,.72);--blue:#2b8cff;}
+  :root{
+    --bg1:#0b1423; --bg2:#081a2c;
+    --card:rgba(255,255,255,.08);
+    --stroke:rgba(255,255,255,.14);
+    --txt:#eaf2ff; --muted:rgba(234,242,255,.72);
+    --blue:#2b8cff;
+  }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:Segoe UI,Arial;color:var(--txt)}
-  body{background:radial-gradient(1200px 800px at 20% 20%, #133a63, transparent 60%),
+  body{
+    background:radial-gradient(1200px 800px at 20% 20%, #133a63, transparent 60%),
                radial-gradient(900px 600px at 80% 40%, #2b8cff33, transparent 55%),
                linear-gradient(160deg,var(--bg1),var(--bg2));
-       overflow:hidden;display:grid;place-items:center;}
-  .card{width:min(420px,92vw);background:var(--card);border:1px solid var(--stroke);border-radius:22px;
-        box-shadow:0 22px 60px rgba(0,0,0,.35);backdrop-filter: blur(10px);padding:18px;}
+    overflow:hidden;
+    display:grid;
+    place-items:center;
+  }
+  .card{
+    width:min(460px,92vw);
+    background:var(--card);
+    border:1px solid var(--stroke);
+    border-radius:22px;
+    box-shadow:0 22px 60px rgba(0,0,0,.35);
+    backdrop-filter: blur(10px);
+    padding:18px;
+  }
   .row{display:flex;gap:12px;align-items:center}
-  .logo{width:52px;height:52px;border-radius:14px;background:rgba(255,255,255,.10);
-        border:1px solid var(--stroke);display:grid;place-items:center;overflow:hidden;}
+  .logo{
+    width:52px;height:52px;border-radius:14px;
+    background:rgba(255,255,255,.10);
+    border:1px solid var(--stroke);
+    display:grid;place-items:center;overflow:hidden;
+  }
   .logo img{width:44px;height:44px;object-fit:contain}
   .title{font-weight:900;letter-spacing:.4px}
   .sub{font-size:12px;color:var(--muted);margin-top:3px}
   .form{margin-top:14px;display:grid;gap:10px}
-  input,button{width:100%;padding:12px;border-radius:14px;border:1px solid var(--stroke);
-               background:rgba(0,0,0,.25);color:var(--txt);outline:none;}
-  button{background:var(--blue);border-color:var(--blue);font-weight:900;cursor:pointer}
-  .err{font-size:12px;color:#ffb3b3;min-height:16px}
+  input,button{
+    width:100%;padding:12px 12px;border-radius:14px;
+    border:1px solid var(--stroke);
+    background:rgba(0,0,0,.25);color:var(--txt);
+    outline:none;
+  }
+  button{
+    background:var(--blue);
+    border-color:var(--blue);
+    font-weight:900;
+    cursor:pointer;
+    transition:.15s transform;
+  }
+  button:active{transform:scale(.98)}
+  .err{font-size:12px;color:#ffb3b3;min-height:16px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -118,21 +158,28 @@ app.get("/login", (req, res) => {
     </div>
 
     <form class="form" method="POST" action="/auth">
-      <input name="username" placeholder="Username" required />
-      <input name="password" type="password" placeholder="Password" required />
+      <input name="username" placeholder="Username" autocomplete="username" required />
+      <input name="password" type="password" placeholder="Password" autocomplete="current-password" required />
       <button type="submit">Login</button>
       <div class="err" id="err"></div>
     </form>
+
 <script>
-  const p=new URLSearchParams(location.search);
+  const p = new URLSearchParams(location.search);
   if(p.get("e")==="1") document.getElementById("err").textContent="Invalid username or password.";
 </script>
   </div>
-</body></html>`);
+</body>
+</html>`);
 });
 
-app.post("/auth", express.urlencoded({ extended: true }), (req, res) => {
-  const { username, password } = req.body || {};
+// ======================
+// LOGIN ACTION
+// ======================
+app.post("/auth", (req, res) => {
+  const username = String((req.body && req.body.username) || "").trim();
+  const password = String((req.body && req.body.password) || "").trim();
+
   if (username === ADMIN_USER && password === ADMIN_PASS) {
     res.setHeader("Set-Cookie", "auth=1; Path=/; Max-Age=604800; SameSite=Lax");
     return res.redirect("/dashboard");
@@ -154,6 +201,7 @@ app.post("/heartbeat", async (req, res) => {
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
+
     await Device.findOneAndUpdate(
       { device_id },
       {
@@ -245,7 +293,7 @@ app.get("/api/command/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD (SEND DISABLED WHEN OFFLINE)
+// DASHBOARD
 // ======================
 app.get("/dashboard", requireAuth, (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -366,7 +414,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
 
           <div class="grid">
             <div>
-              <div class="hint">Signal Type (update text set)</div>
+              <div class="hint">Signal Type</div>
               <select id="type">
                 <option value="red">RED</option>
                 <option value="amber">AMBER</option>
@@ -459,7 +507,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
 
     (data||[]).forEach(d=>{
       deviceStatus.set(d.device_id, d.status);
-
       const opt = document.createElement("option");
       opt.value = d.device_id;
       opt.textContent = d.device_id + " (" + d.status + ")";
@@ -472,15 +519,11 @@ app.get("/dashboard", requireAuth, (req, res) => {
     (data||[]).forEach(d=>{
       const isOn = (d.status === "online");
       if(isOn) on++; else off++;
-
       const pos = [d.lat || 0, d.lng || 0];
       const icon = markerIcon(d);
-
-      const pop =
-        "<b>"+d.device_id+"</b>" +
-        "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>" +
-        "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
-
+      const pop = "<b>"+d.device_id+"</b>"
+        + "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>"
+        + "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
       if(markers.has(d.device_id)){
         markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
       } else {
@@ -502,8 +545,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
 
   async function sendCloudCommand(){
     updateSendButton();
-    const btn = document.getElementById("sendBtn");
-    if(btn.disabled) return;
+    if(document.getElementById("sendBtn").disabled) return;
 
     const device_id = document.getElementById("deviceSelect").value;
     const type = document.getElementById("type").value;
