@@ -1,17 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
-const path = require("path");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Serve logo/static assets
-app.use("/assets", express.static(path.join(__dirname, "public")));
-
 // ======================
-// DATABASE
+// DATABASE (Local + Render)
 // ======================
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
 
@@ -92,12 +88,12 @@ app.post("/heartbeat", async (req, res) => {
 });
 
 // ======================
-// DEVICES (fast offline)
+// DEVICES (auto-offline FAST)
 // ======================
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    const OFFLINE_AFTER_MS = 5000; // 5 sec
+    const OFFLINE_AFTER_MS = 5000; // 5 sec offline (fast)
 
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
@@ -112,7 +108,9 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD (LEFT TABS + LOGIN + LOGO + PINS)
+// DASHBOARD (NEW LOOK + 2 TABS)
+// Tab1: MAP
+// Tab2: CONTROL (generates ESP /set and /force links)
 // ======================
 app.get("/dashboard", (req, res) => {
   res.send(`
@@ -120,7 +118,7 @@ app.get("/dashboard", (req, res) => {
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>ARCADIS - Live PMU Status</title>
+<title>Traffic Display Monitor</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -128,400 +126,314 @@ app.get("/dashboard", (req, res) => {
 
 <style>
   :root{
-    --bg:#f4f6f9;
-    --panel:#ffffff;
-    --stroke:#e6eaf0;
-    --txt:#0f172a;
-    --muted:#64748b;
-    --accent:#1d4ed8;
-    --green:#22c55e;
-    --red:#ef4444;
+    --bg:#071422;
+    --panel:rgba(255,255,255,.06);
+    --stroke:rgba(255,255,255,.10);
+    --txt:#eaf2ff;
+    --muted:rgba(234,242,255,.70);
+    --blue:#2b8cff;
+    --green:#32ff7a;
+    --red:#ff3b3b;
+    --amber:#ffc84a;
   }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:var(--bg);color:var(--txt)}
-  a{color:inherit}
-
-  /* Top brand bar */
   .topbar{
-    height:60px;display:flex;align-items:center;gap:12px;
-    background:var(--panel);border-bottom:1px solid var(--stroke);
-    padding:0 16px;
-  }
-  .brandRow{display:flex;align-items:center;gap:10px}
-  .brandTitle{font-weight:900;font-size:20px;letter-spacing:.5px}
-  .brandSub{font-size:12px;color:var(--muted);margin-top:2px}
-
-  /* Main layout */
-  .main{height:calc(100% - 60px);display:flex}
-  .sidebar{
-    width:220px;background:var(--panel);border-right:1px solid var(--stroke);
-    padding:12px;display:flex;flex-direction:column;gap:10px;
-  }
-  .tabBtn{
-    padding:12px 12px;border-radius:10px;border:1px solid var(--stroke);
-    background:#f8fafc;cursor:pointer;font-weight:800;
-    display:flex;align-items:center;gap:10px;
-    transition: transform .15s ease, box-shadow .15s ease;
-  }
-  .tabBtn:hover{transform:translateY(-1px);box-shadow:0 10px 18px rgba(15,23,42,.08)}
-  .tabBtn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-
-  .content{flex:1;display:flex;flex-direction:column}
-  .cardsRow{
-    padding:12px 16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;
-  }
-  .card{
-    background:var(--panel);border:1px solid var(--stroke);border-radius:12px;
-    padding:12px 14px;
-  }
-  .cardLabel{font-size:12px;color:var(--muted);font-weight:700}
-  .cardValue{font-size:26px;font-weight:900;margin-top:6px}
-
-  .view{display:none;flex:1;padding:0 16px 16px 16px}
-  .view.active{display:block}
-  #map{height:100%;border-radius:14px;border:1px solid var(--stroke);overflow:hidden}
-
-  /* PMU list tab */
-  .panel{
-    background:var(--panel);border:1px solid var(--stroke);border-radius:14px;
-    padding:12px;
-  }
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .search{
-    flex:1;min-width:220px;
-    padding:12px;border:1px solid var(--stroke);border-radius:10px;outline:none;
-  }
-  .btn{
-    padding:12px 14px;border-radius:10px;border:1px solid var(--stroke);
-    background:var(--accent);color:#fff;font-weight:900;cursor:pointer;
-    transition: transform .15s ease, box-shadow .15s ease;
-  }
-  .btn:hover{transform:translateY(-1px);box-shadow:0 12px 18px rgba(29,78,216,.18)}
-  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
-  th,td{padding:10px;border-bottom:1px solid var(--stroke);text-align:left}
-  th{color:var(--muted);font-size:12px}
-  .pill{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:4px 10px;border-radius:999px;font-weight:900;font-size:12px;
-  }
-  .pill.on{background:rgba(34,197,94,.12);color:var(--green)}
-  .pill.off{background:rgba(239,68,68,.12);color:var(--red)}
-  .dot{width:8px;height:8px;border-radius:50%}
-  .dot.on{background:var(--green)} .dot.off{background:var(--red)}
-
-  /* Bottom-left logo */
-  .footerBrand{
-    position:fixed;left:14px;bottom:12px;
-    display:flex;align-items:center;gap:10px;
-    background:rgba(255,255,255,.92);
-    border:1px solid var(--stroke);
-    border-radius:12px;padding:8px 10px;
-    box-shadow:0 16px 26px rgba(15,23,42,.10);
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    padding:12px 14px;background:rgba(0,0,0,.22);
+    border-bottom:1px solid var(--stroke);
     backdrop-filter: blur(6px);
   }
-  .footerBrand img{height:26px;width:auto;display:block}
-  .footerText{font-size:12px;color:var(--muted);font-weight:800}
-  .footerText b{color:var(--txt)}
+  .brand{font-weight:900;letter-spacing:.6px}
+  .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .left{display:flex;gap:14px;align-items:center}
+  .tabs{display:flex;gap:10px}
+  .tab{
+    cursor:pointer;user-select:none;
+    padding:8px 14px;border-radius:14px;
+    background:var(--panel);border:1px solid var(--stroke);
+    font-weight:800;
+  }
+  .tab.active{background:var(--blue);border-color:var(--blue)}
+  .cards{display:flex;gap:10px;flex-wrap:wrap}
+  .card{
+    background:var(--panel);border:1px solid var(--stroke);
+    border-radius:16px;padding:10px 14px;min-width:150px;
+    box-shadow:0 12px 28px rgba(0,0,0,.25);
+  }
+  .label{font-size:11px;color:var(--muted);letter-spacing:.6px}
+  .n{font-size:26px;font-weight:900;margin-top:4px}
+  .badge{display:inline-flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .dot.g{background:var(--green)} .dot.r{background:var(--red)} .dot.a{background:var(--amber)}
 
-  /* LOGIN overlay */
-  .loginOverlay{
-    position:fixed;inset:0;
-    background:linear-gradient(135deg,#0b1220, #0b2a3a);
-    display:flex;align-items:center;justify-content:center;
-    z-index:9999;
+  .view{display:none;height:calc(100% - 78px)}
+  .view.active{display:block}
+
+  #map{height:100%}
+
+  /* Control view */
+  .wrap{max-width:980px;margin:18px auto;padding:0 14px}
+  .panel{
+    background:var(--panel);border:1px solid var(--stroke);
+    border-radius:18px;padding:16px;
+    box-shadow:0 12px 28px rgba(0,0,0,.25);
   }
-  .loginCard{
-    width:min(420px,92vw);
-    background:rgba(255,255,255,.10);
-    border:1px solid rgba(255,255,255,.18);
-    border-radius:18px;
-    padding:18px;
-    color:#fff;
-    box-shadow:0 22px 70px rgba(0,0,0,.45);
-    animation: pop .28s ease;
-    backdrop-filter: blur(10px);
+  .h{font-size:18px;font-weight:900}
+  .p{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  .grid1{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
+  input,select,button{
+    width:100%;padding:12px 12px;border-radius:14px;
+    border:1px solid var(--stroke);
+    background:rgba(0,0,0,.25);color:var(--txt);
+    outline:none;
   }
-  @keyframes pop{from{transform:scale(.97);opacity:.0}to{transform:scale(1);opacity:1}}
-  .loginTitle{font-size:20px;font-weight:900;letter-spacing:.6px}
-  .loginSub{margin-top:6px;font-size:12px;opacity:.85}
-  .loginGrid{display:grid;gap:10px;margin-top:14px}
-  .loginInput{
-    width:100%;padding:12px 12px;border-radius:12px;
-    border:1px solid rgba(255,255,255,.22);
-    background:rgba(0,0,0,.20);
-    color:#fff;outline:none;
+  button{
+    background:var(--blue);border-color:var(--blue);
+    font-weight:900;cursor:pointer;
   }
-  .loginBtn{
-    width:100%;padding:12px 12px;border-radius:12px;border:0;
-    background:#2b8cff;color:#fff;font-weight:900;cursor:pointer;
+  .hint{font-size:12px;color:var(--muted)}
+  .codebox{
+    background:rgba(0,0,0,.35);border:1px solid var(--stroke);
+    border-radius:14px;padding:12px;font-family:Consolas, monospace;font-size:12px;
+    overflow:auto;
+    white-space:pre-wrap;
   }
-  .loginErr{margin-top:10px;font-size:12px;color:#ffb4b4;display:none}
+  .btnRow{display:flex;gap:10px;flex-wrap:wrap}
+  .btn2{
+    display:inline-block;
+    width:auto;
+    padding:10px 12px;border-radius:14px;
+    border:1px solid var(--stroke);
+    background:rgba(255,255,255,.06);
+    color:var(--txt);
+    text-decoration:none;
+    font-weight:900;
+  }
+  .btn2:hover{border-color:rgba(255,255,255,.22)}
 </style>
 </head>
 
 <body>
 
-<!-- LOGIN -->
-<div class="loginOverlay" id="loginOverlay">
-  <div class="loginCard">
-    <div class="loginTitle">ARCADIS PMU Dashboard</div>
-    <div class="loginSub">Sign in to access live junction status</div>
-    <div class="loginGrid">
-      <input class="loginInput" id="u" placeholder="Username" autocomplete="off">
-      <input class="loginInput" id="p" placeholder="Password" type="password">
-      <button class="loginBtn" onclick="doLogin()">Login</button>
-      <div class="loginErr" id="loginErr">Invalid username or password</div>
-    </div>
-  </div>
-</div>
-
-<!-- APP -->
 <div class="topbar">
-  <div class="brandRow">
-    <div style="font-size:26px;font-weight:900;color:#0f172a;">ARCADIS</div>
+  <div class="left">
     <div>
-      <div class="brandSub">Live pmu data processing and junction status</div>
+      <div class="brand">CYBERABAD TRAFFIC DISPLAY MONITOR</div>
+      <div class="sub">Live status + location overview</div>
+    </div>
+    <div class="tabs">
+      <div class="tab active" id="tMap" onclick="showTab('map')">Map</div>
+      <div class="tab" id="tCtl" onclick="showTab('ctl')">Control</div>
     </div>
   </div>
-  <div style="margin-left:auto;display:flex;gap:10px;align-items:center;">
-    <button class="btn" onclick="manualRefresh()">Refresh</button>
-    <button class="btn" style="background:#0f172a" onclick="logout()">Logout</button>
+
+  <div class="cards">
+    <div class="card">
+      <div class="label">TOTAL DEVICES</div>
+      <div class="n" id="total">0</div>
+      <div class="badge"><span class="dot a"></span>Refresh: 1 sec</div>
+    </div>
+    <div class="card">
+      <div class="label">ONLINE</div>
+      <div class="n" id="on">0</div>
+      <div class="badge"><span class="dot g"></span>Heartbeat OK</div>
+    </div>
+    <div class="card">
+      <div class="label">OFFLINE</div>
+      <div class="n" id="off">0</div>
+      <div class="badge"><span class="dot r"></span>No heartbeat</div>
+    </div>
   </div>
 </div>
 
-<div class="main">
-  <div class="sidebar">
-    <div class="tabBtn active" id="btnMap" onclick="showView('map')">🗺️ Map</div>
-    <div class="tabBtn" id="btnPmu" onclick="showView('pmu')">📋 PMU Info</div>
-  </div>
+<div class="view active" id="viewMap">
+  <div id="map"></div>
+</div>
 
-  <div class="content">
-    <div class="cardsRow">
-      <div class="card">
-        <div class="cardLabel">Total PMUs</div>
-        <div class="cardValue" id="total">0</div>
+<div class="view" id="viewCtl">
+  <div class="wrap">
+    <div class="panel">
+      <div class="h">Control Tab (Same like ESP Browser Control)</div>
+      <div class="p">
+        Your ESP control page runs inside the ESP (<b>/set</b> and <b>/force</b>).
+        So these buttons work only when your laptop/phone is connected to that ESP Wi-Fi (<b>ARCADIS_DISPLAY</b>)
+        OR same router LAN.
       </div>
-      <div class="card">
-        <div class="cardLabel">Online PMUs</div>
-        <div class="cardValue" id="on">0</div>
-      </div>
-      <div class="card">
-        <div class="cardLabel">Offline PMUs</div>
-        <div class="cardValue" id="off">0</div>
-      </div>
-    </div>
 
-    <div class="view active" id="viewMap">
-      <div id="map"></div>
-    </div>
-
-    <div class="view" id="viewPmu">
-      <div class="panel">
-        <div class="row">
-          <input class="search" id="search" placeholder="Search Junction Name / Device ID..." oninput="renderTable()">
-          <button class="btn" onclick="manualRefresh()">Refresh</button>
+      <div class="grid">
+        <div>
+          <div class="hint">Select Device</div>
+          <select id="deviceSelect"></select>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Device</th>
-              <th>Status</th>
-              <th>Last Seen</th>
-              <th>Lat</th>
-              <th>Lng</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
+        <div>
+          <div class="hint">ESP IP (Local)</div>
+          <input id="espIp" placeholder="Example: 192.168.4.1" value="192.168.4.1"/>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <div class="hint">Signal Type (for /set)</div>
+          <select id="type">
+            <option value="red">RED</option>
+            <option value="amber">AMBER</option>
+            <option value="green">GREEN</option>
+            <option value="no">NO SIGNAL</option>
+          </select>
+        </div>
+        <div>
+          <div class="hint">Force Signal (for /force)</div>
+          <select id="force">
+            <option value="">No Force</option>
+            <option value="red">Force RED</option>
+            <option value="amber">Force AMBER</option>
+            <option value="green">Force GREEN</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <div class="hint">Message Line 1</div>
+          <input id="msg1" placeholder="Enter line 1"/>
+        </div>
+        <div>
+          <div class="hint">Message Line 2</div>
+          <input id="msg2" placeholder="Enter line 2"/>
+        </div>
+      </div>
+
+      <div class="grid1">
+        <button onclick="buildLinks()">Create Control Links</button>
+
+        <div class="btnRow" id="buttons"></div>
+
+        <div class="hint">Copy links or click them when you are connected to ESP Wi-Fi.</div>
+        <div class="codebox" id="out">Links will appear here...</div>
       </div>
     </div>
   </div>
-</div>
-
-<!-- Bottom-left logo -->
-<div class="footerBrand">
-  <img src="/assets/image.png" alt="Arcadis Logo">
-  <div class="footerText"><b>Powered by</b> Arcadis</div>
 </div>
 
 <script>
-  // ===== LOGIN (UI-level) =====
-  // Note: this is client-side only. For real security, we add server sessions later.
-  const ADMIN_USER = "admin";
-  const ADMIN_PASS = "admin123";
-
-  function doLogin(){
-    const u = (document.getElementById("u").value || "").trim();
-    const p = (document.getElementById("p").value || "").trim();
-    const err = document.getElementById("loginErr");
-
-    if(u === ADMIN_USER && p === ADMIN_PASS){
-      localStorage.setItem("arcadis_auth", "1");
-      document.getElementById("loginOverlay").style.display = "none";
-      err.style.display = "none";
-      setTimeout(()=>{ map.invalidateSize(); }, 150);
-    }else{
-      err.style.display = "block";
-    }
-  }
-
-  function logout(){
-    localStorage.removeItem("arcadis_auth");
-    location.reload();
-  }
-
-  // auto-check
-  if(localStorage.getItem("arcadis_auth") === "1"){
-    document.getElementById("loginOverlay").style.display = "none";
-  }
-
-  // Enter key login
-  document.addEventListener("keydown", (e)=>{
-    if(e.key === "Enter" && document.getElementById("loginOverlay").style.display !== "none"){
-      doLogin();
-    }
-  });
-
-  // ===== Views =====
-  function showView(which){
-    document.getElementById("btnMap").classList.toggle("active", which==="map");
-    document.getElementById("btnPmu").classList.toggle("active", which==="pmu");
-
+  // Tabs
+  function showTab(which){
+    document.getElementById("tMap").classList.toggle("active", which==="map");
+    document.getElementById("tCtl").classList.toggle("active", which==="ctl");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
-    document.getElementById("viewPmu").classList.toggle("active", which==="pmu");
-
-    if(which==="map") setTimeout(()=>map.invalidateSize(), 150);
+    document.getElementById("viewCtl").classList.toggle("active", which==="ctl");
+    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
   }
 
-  // ===== MAP =====
+  // Map
   const map = L.map('map').setView([17.3850,78.4867], 11);
-
-  // Google tiles
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
     maxZoom: 20
   }).addTo(map);
 
-  // Pin icon like screenshot
-  function pinIcon(status){
+  const markers = new Map();
+
+  function makeMarkerIcon(status){
     const isOn = (status === "online");
-    const color = isOn ? "#22c55e" : "#ef4444";
+    const c = isOn ? "#32ff7a" : "#ff3b3b";
+    const ring = isOn ? "rgba(50,255,122,.45)" : "rgba(255,59,59,.40)";
     return L.divIcon({
-      className: "",
+      className:"",
       html: \`
-        <div style="position:relative;width:30px;height:40px;">
-          <div style="
-            position:absolute;left:50%;top:0;
-            width:22px;height:22px;border-radius:50%;
-            background:\${color};
-            transform:translateX(-50%);
-            box-shadow:0 10px 18px rgba(0,0,0,.25);
-            border:2px solid #ffffff;
-          "></div>
-          <div style="
-            position:absolute;left:50%;top:16px;
-            width:0;height:0;
-            border-left:11px solid transparent;
-            border-right:11px solid transparent;
-            border-top:20px solid \${color};
-            transform:translateX(-50%);
-            filter:drop-shadow(0 10px 14px rgba(0,0,0,.25));
-          "></div>
-          <div style="
-            position:absolute;left:50%;top:6px;
-            width:8px;height:8px;border-radius:50%;
-            background:#fff;
-            transform:translateX(-50%);
-          "></div>
+        <div style="position:relative;width:22px;height:22px;">
+          <div style="position:absolute;inset:-10px;border-radius:50%;background:\${ring};"></div>
+          <div style="position:absolute;left:50%;top:50%;width:18px;height:18px;border-radius:50%;background:\${c};border:2px solid #fff;transform:translate(-50%,-50%);box-shadow:0 0 14px \${ring};"></div>
+          <div style="position:absolute;left:50%;top:100%;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:11px solid \${c};transform:translate(-50%,-2px);filter:drop-shadow(0 4px 6px rgba(0,0,0,.35));"></div>
         </div>\`,
-      iconSize: [30, 40],
-      iconAnchor: [15, 40],
-      popupAnchor: [0, -36],
+      iconSize:[22,22],
+      iconAnchor:[11,22]
     });
   }
 
-  const markers = new Map();
-  let latestData = [];
-
-  async function fetchDevices(){
-    const res = await fetch("/devices", { cache: "no-store" });
+  async function load(){
+    const res = await fetch('/devices');
     const data = await res.json();
-    latestData = Array.isArray(data) ? data : [];
-    return latestData;
-  }
 
-  function updateCounters(data){
-    let on = 0, off = 0;
-    data.forEach(d => (d.status === "online") ? on++ : off++);
-    document.getElementById("total").innerText = data.length;
+    // fill control dropdown
+    const sel = document.getElementById("deviceSelect");
+    const current = sel.value;
+    sel.innerHTML = "";
+    (data||[]).forEach(d=>{
+      const opt = document.createElement("option");
+      opt.value = d.device_id;
+      opt.textContent = d.device_id + " (" + d.status + ")";
+      sel.appendChild(opt);
+    });
+    if(current) sel.value = current;
+
+    let on=0, off=0;
+    (data||[]).forEach(d=>{
+      const isOn = (d.status === "online");
+      if(isOn) on++; else off++;
+
+      const pos = [d.lat || 0, d.lng || 0];
+      const icon = makeMarkerIcon(d.status);
+
+      const pop = "<b>"+d.device_id+"</b>"
+        + "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>"
+        + "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+
+      if(markers.has(d.device_id)){
+        markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
+      }else{
+        const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
+        markers.set(d.device_id,m);
+      }
+    });
+
+    document.getElementById("total").innerText = (data||[]).length;
     document.getElementById("on").innerText = on;
     document.getElementById("off").innerText = off;
   }
 
-  function updateMap(data){
-    data.forEach(d => {
-      const id = d.device_id || "";
-      const pos = [d.lat || 0, d.lng || 0];
-      const icon = pinIcon(d.status);
-      const pop =
-        "<b>"+id+"</b>" +
-        "<br>Status: <b style='color:"+(d.status==="online"?"#22c55e":"#ef4444")+"'>"+d.status+"</b>" +
-        "<br>Last seen: "+ new Date(d.last_seen||0).toLocaleString();
+  load();
+  setInterval(load, 1000); // refresh every 1 sec
 
-      if(markers.has(id)){
-        markers.get(id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
-      }else{
-        const m = L.marker(pos, { icon }).addTo(map).bindPopup(pop);
-        markers.set(id, m);
-      }
-    });
-  }
+  // CONTROL: build ESP links (NO ESP change needed)
+  function buildLinks(){
+    const ip = (document.getElementById("espIp").value || "192.168.4.1").trim();
+    const type = document.getElementById("type").value;
+    const msg1 = encodeURIComponent(document.getElementById("msg1").value || "");
+    const msg2 = encodeURIComponent(document.getElementById("msg2").value || "");
+    const force = document.getElementById("force").value;
 
-  function renderTable(){
-    const q = (document.getElementById("search").value || "").trim().toLowerCase();
-    const tbody = document.getElementById("tbody");
-    tbody.innerHTML = "";
+    const setUrl = "http://" + ip + "/set?type=" + type + "&msg1=" + msg1 + "&msg2=" + msg2;
+    const forceUrl = force ? ("http://" + ip + "/force?sig=" + force) : "";
 
-    latestData
-      .filter(d => !q || (String(d.device_id||"").toLowerCase().includes(q)))
-      .slice(0, 800) // safety cap
-      .forEach(d => {
-        const tr = document.createElement("tr");
+    // show clickable buttons
+    const btnBox = document.getElementById("buttons");
+    btnBox.innerHTML = "";
 
-        const status = d.status === "online" ? "on" : "off";
-        tr.innerHTML = \`
-          <td><b>\${d.device_id || ""}</b></td>
-          <td>
-            <span class="pill \${status}">
-              <span class="dot \${status}"></span>
-              \${d.status}
-            </span>
-          </td>
-          <td>\${new Date(d.last_seen||0).toLocaleString()}</td>
-          <td>\${(d.lat ?? 0).toFixed(6)}</td>
-          <td>\${(d.lng ?? 0).toFixed(6)}</td>
-        \`;
-        tbody.appendChild(tr);
-      });
-  }
+    const a1 = document.createElement("a");
+    a1.href = setUrl;
+    a1.target = "_blank";
+    a1.className = "btn2";
+    a1.textContent = "Open /set (Update Text)";
+    btnBox.appendChild(a1);
 
-  async function loadAll(){
-    try{
-      const data = await fetchDevices();
-      updateCounters(data);
-      updateMap(data);
-      renderTable();
-    }catch(e){
-      // keep silent
+    if(forceUrl){
+      const a2 = document.createElement("a");
+      a2.href = forceUrl;
+      a2.target = "_blank";
+      a2.className = "btn2";
+      a2.textContent = "Open /force (Force Signal)";
+      btnBox.appendChild(a2);
     }
-  }
 
-  function manualRefresh(){
-    loadAll();
+    let out = "";
+    out += "SET (Update Text)\\n" + setUrl + "\\n\\n";
+    out += "FORCE (Optional)\\n" + (forceUrl || "Not selected") + "\\n\\n";
+    out += "NOTE: These links work only when your device is connected to ESP Wi-Fi (ARCADIS_DISPLAY) or same LAN.";
+    document.getElementById("out").textContent = out;
   }
-
-  loadAll();
-  setInterval(loadAll, 1000); // 1 sec refresh
 </script>
 
 </body>
