@@ -1,20 +1,12 @@
-// server.js (FULL REPLACEMENT)
-// ✅ FIX: login failing because form fields were not being read correctly in some setups
-// ✅ Uses express.urlencoded globally + reads req.body safely
-// ✅ Credentials: admin / admin1234
-
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 
 const app = express();
 app.use(cors());
-
-// ✅ IMPORTANT: parse both JSON and FORM
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// ✅ serve public/image.png as /image.png
+// serve public/ (logo)
 app.use(express.static("public"));
 
 // ======================
@@ -24,7 +16,7 @@ const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monito
 
 mongoose
   .connect(MONGO_URI)
-  .then(() => console.log("MongoDB Connected ✅"))
+  .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log("DB Error:", err));
 
 // ======================
@@ -41,11 +33,11 @@ const Device = mongoose.model("Device", deviceSchema);
 
 const commandSchema = new mongoose.Schema({
   device_id: { type: String, required: true },
-  type: { type: String, default: "red" },
+  type: { type: String, default: "red" },     // which message set updates
   msg1: { type: String, default: "" },
   msg2: { type: String, default: "" },
-  force: { type: String, default: "" },
-  dur: { type: Number, default: 10000 },
+  force: { type: String, default: "" },       // red/amber/green/"" (optional)
+  dur: { type: Number, default: 10000 },      // force duration in ms
   created_at: { type: Number, default: () => Date.now() },
   delivered: { type: Boolean, default: false }
 });
@@ -80,7 +72,9 @@ function requireAuth(req, res, next) {
 // ======================
 // HOME
 // ======================
-app.get("/", (req, res) => res.send("Server Running ✅"));
+app.get("/", (req, res) => {
+  res.send("Server Running ✅");
+});
 
 // ======================
 // LOGIN PAGE
@@ -110,14 +104,29 @@ app.get("/login", (req, res) => {
     display:grid;
     place-items:center;
   }
+  .blob{
+    position:absolute;
+    width:520px; height:520px; border-radius:50%;
+    background:conic-gradient(from 90deg, #2b8cff55, #32ff7a33, #ff3b3b33, #2b8cff55);
+    filter:blur(50px);
+    animation:float 8s ease-in-out infinite;
+    opacity:.55;
+    left:10%; top:10%;
+  }
+  .blob.b2{width:420px;height:420px;animation-duration:10s;left:60%;top:55%;opacity:.35}
+  @keyframes float{
+    0%,100%{transform:translate(-20px,-10px) scale(1)}
+    50%{transform:translate(30px,25px) scale(1.06)}
+  }
   .card{
-    width:min(460px,92vw);
+    width:min(420px,92vw);
     background:var(--card);
     border:1px solid var(--stroke);
     border-radius:22px;
     box-shadow:0 22px 60px rgba(0,0,0,.35);
     backdrop-filter: blur(10px);
     padding:18px;
+    position:relative;
   }
   .row{display:flex;gap:12px;align-items:center}
   .logo{
@@ -144,16 +153,20 @@ app.get("/login", (req, res) => {
     transition:.15s transform;
   }
   button:active{transform:scale(.98)}
-  .err{font-size:12px;color:#ffb3b3;min-height:16px;margin-top:6px}
+  .err{font-size:12px;color:#ffb3b3;min-height:16px}
+  .foot{margin-top:10px;font-size:12px;color:var(--muted);display:flex;gap:10px;align-items:center;justify-content:space-between}
 </style>
 </head>
 <body>
+  <div class="blob"></div>
+  <div class="blob b2"></div>
+
   <div class="card">
     <div class="row">
       <div class="logo"><img src="/image.png" onerror="this.style.display='none'"/></div>
       <div>
         <div class="title">ARCADIS • Traffic Display Monitor</div>
-        <div class="sub">Secure access</div>
+        <div class="sub">Secure access for operations</div>
       </div>
     </div>
 
@@ -164,22 +177,24 @@ app.get("/login", (req, res) => {
       <div class="err" id="err"></div>
     </form>
 
+    <div class="foot">
+      <span>Powered by Arcadis</span>
+      <span id="build"></span>
+    </div>
+  </div>
+
 <script>
   const p = new URLSearchParams(location.search);
   if(p.get("e")==="1") document.getElementById("err").textContent="Invalid username or password.";
+  document.getElementById("build").textContent = new Date().toLocaleString();
 </script>
-  </div>
 </body>
 </html>`);
 });
 
-// ======================
-// LOGIN ACTION
-// ======================
-app.post("/auth", (req, res) => {
-  const username = String((req.body && req.body.username) || "").trim();
-  const password = String((req.body && req.body.password) || "").trim();
-
+// parse form POST
+app.post("/auth", express.urlencoded({ extended: true }), (req, res) => {
+  const { username, password } = req.body || {};
   if (username === ADMIN_USER && password === ADMIN_PASS) {
     res.setHeader("Set-Cookie", "auth=1; Path=/; Max-Age=604800; SameSite=Lax");
     return res.redirect("/dashboard");
@@ -193,8 +208,8 @@ app.get("/logout", (req, res) => {
 });
 
 // ======================
-// HEARTBEAT
-// ======================
+// HEARTBEAT (ESP -> Server)
+// body: { device_id, lat?, lng? }
 app.post("/heartbeat", async (req, res) => {
   try {
     const { device_id, lat, lng } = req.body || {};
@@ -223,12 +238,11 @@ app.post("/heartbeat", async (req, res) => {
 });
 
 // ======================
-// DEVICES
-// ======================
+// DEVICES LIST (auto offline)
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    const OFFLINE_AFTER_MS = 15000;
+    const OFFLINE_AFTER_MS = 15000; // 15 sec (stable)
 
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
@@ -243,8 +257,7 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// COMMAND API
-// ======================
+// CLOUD COMMAND (Dashboard -> MongoDB)
 app.post("/api/command", async (req, res) => {
   try {
     const { device_id, type, msg1, msg2, force, dur } = req.body || {};
@@ -266,6 +279,7 @@ app.post("/api/command", async (req, res) => {
   }
 });
 
+// ESP pulls latest undelivered command (ESP must call this)
 app.get("/api/command/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -293,8 +307,7 @@ app.get("/api/command/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD
-// ======================
+// DASHBOARD (protected)
 app.get("/dashboard", requireAuth, (req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
@@ -302,94 +315,202 @@ app.get("/dashboard", requireAuth, (req, res) => {
 <meta charset="utf-8"/>
 <title>Arcadis • Traffic Display Monitor</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
 <style>
-  :root{--bg:#071422;--panel:rgba(255,255,255,.07);--stroke:rgba(255,255,255,.12);
-        --txt:#eaf2ff;--muted:rgba(234,242,255,.72);--blue:#2b8cff;--green:#32ff7a;--red:#ff3b3b;}
+  :root{
+    --bg:#071422;
+    --panel:rgba(255,255,255,.07);
+    --stroke:rgba(255,255,255,.12);
+    --txt:#eaf2ff;
+    --muted:rgba(234,242,255,.72);
+    --blue:#2b8cff;
+    --green:#32ff7a;
+    --red:#ff3b3b;
+    --amber:#ffc84a;
+  }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:var(--bg);color:var(--txt)}
   .layout{display:grid;grid-template-columns:260px 1fr;height:100%}
-  .side{border-right:1px solid var(--stroke);background:linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.18));
-        padding:14px;display:flex;flex-direction:column;gap:12px;}
+  .side{
+    border-right:1px solid var(--stroke);
+    background:linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.18));
+    padding:14px;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
   .brandRow{display:flex;align-items:center;gap:12px}
-  .brandLogo{width:46px;height:46px;border-radius:14px;background:rgba(255,255,255,.08);
-             border:1px solid var(--stroke);overflow:hidden;display:grid;place-items:center;}
+  .brandLogo{
+    width:46px;height:46px;border-radius:14px;
+    background:rgba(255,255,255,.08);
+    border:1px solid var(--stroke);
+    overflow:hidden;
+    display:grid;place-items:center;
+  }
   .brandLogo img{width:40px;height:40px;object-fit:contain}
   .brandTitle{font-weight:900;letter-spacing:.3px}
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.3}
+
   .nav{display:grid;gap:10px;margin-top:6px}
-  .btn{user-select:none;cursor:pointer;padding:12px;border-radius:14px;background:var(--panel);
-       border:1px solid var(--stroke);font-weight:900;display:flex;justify-content:space-between;align-items:center;}
+  .btn{
+    user-select:none;cursor:pointer;
+    padding:12px 12px;border-radius:14px;
+    background:var(--panel);
+    border:1px solid var(--stroke);
+    font-weight:900;
+    display:flex;justify-content:space-between;align-items:center;
+  }
   .btn.active{background:var(--blue);border-color:var(--blue)}
-  .logout{margin-top:auto}
-  .logout a{color:var(--txt);text-decoration:none;font-weight:900;padding:10px 12px;border-radius:14px;
-            border:1px solid var(--stroke);background:rgba(255,255,255,.06);display:inline-block;}
+  .btn small{font-weight:700;opacity:.9}
+  .btn:hover{border-color:rgba(255,255,255,.24)}
+  .logout{margin-top:auto;display:flex;gap:10px;align-items:center}
+  .logout a{
+    color:var(--txt);text-decoration:none;font-weight:900;
+    padding:10px 12px;border-radius:14px;
+    border:1px solid var(--stroke);
+    background:rgba(255,255,255,.06);
+    display:inline-block;
+  }
+
   .main{display:grid;grid-template-rows:auto 1fr;min-width:0}
-  .topbar{display:flex;justify-content:space-between;gap:12px;align-items:center;
-          padding:12px 14px;border-bottom:1px solid var(--stroke);background:rgba(0,0,0,.22);backdrop-filter: blur(6px);}
-  .cards{display:flex;gap:10px;flex-wrap:wrap}
-  .card{background:var(--panel);border:1px solid var(--stroke);border-radius:16px;padding:10px 14px;min-width:160px;
-        box-shadow:0 12px 28px rgba(0,0,0,.25);}
+  .topbar{
+    display:flex;justify-content:space-between;gap:12px;align-items:center;
+    padding:12px 14px;border-bottom:1px solid var(--stroke);
+    background:rgba(0,0,0,.22);
+    backdrop-filter: blur(6px);
+  }
+  .cards{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+  .card{
+    background:var(--panel);border:1px solid var(--stroke);
+    border-radius:16px;padding:10px 14px;min-width:160px;
+    box-shadow:0 12px 28px rgba(0,0,0,.25);
+  }
   .label{font-size:11px;color:var(--muted);letter-spacing:.6px}
   .n{font-size:26px;font-weight:900;margin-top:4px}
+  .badge{display:inline-flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .dot.g{background:var(--green)} .dot.r{background:var(--red)} .dot.a{background:var(--amber)}
+
   .view{display:none;height:100%;min-height:0}
   .view.active{display:block}
   #map{height:100%}
+
+  /* Control panel */
   .wrap{max-width:980px;margin:18px auto;padding:0 14px}
-  .panel{background:var(--panel);border:1px solid var(--stroke);border-radius:18px;padding:16px;
-         box-shadow:0 12px 28px rgba(0,0,0,.25);}
+  .panel{
+    background:var(--panel);border:1px solid var(--stroke);
+    border-radius:18px;padding:16px;
+    box-shadow:0 12px 28px rgba(0,0,0,.25);
+  }
   .h{font-size:18px;font-weight:900}
   .p{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
   .grid1{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
-  input,select,button{width:100%;padding:12px;border-radius:14px;border:1px solid var(--stroke);
-                      background:rgba(0,0,0,.25);color:var(--txt);outline:none;}
+  input,select,button{
+    width:100%;padding:12px 12px;border-radius:14px;
+    border:1px solid var(--stroke);
+    background:rgba(0,0,0,.25);color:var(--txt);
+    outline:none;
+  }
   button{background:var(--blue);border-color:var(--blue);font-weight:900;cursor:pointer}
-  button:disabled{opacity:.5;cursor:not-allowed}
   .hint{font-size:12px;color:var(--muted)}
-  .codebox{background:rgba(0,0,0,.35);border:1px solid var(--stroke);border-radius:14px;padding:12px;
-           font-family:Consolas, monospace;font-size:12px;overflow:auto;white-space:pre-wrap;}
+  .codebox{
+    background:rgba(0,0,0,.35);border:1px solid var(--stroke);
+    border-radius:14px;padding:12px;font-family:Consolas, monospace;font-size:12px;
+    overflow:auto;white-space:pre-wrap;
+  }
 
-  .mkWrap{position:relative;width:160px;height:44px;transform:translate(-22px,-26px);pointer-events:none}
-  .mkGlow{position:absolute;left:18px;top:18px;width:26px;height:26px;border-radius:50%;filter:blur(1px);opacity:.35}
-  .mkPin{position:absolute;left:22px;top:6px;width:18px;height:18px;border-radius:50%;
-         border:3px solid #fff;box-shadow:0 10px 18px rgba(0,0,0,.35);}
-  .mkTail{position:absolute;left:23px;top:20px;width:0;height:0;border-left:8px solid transparent;
-          border-right:8px solid transparent;border-top:14px solid;filter:drop-shadow(0 8px 10px rgba(0,0,0,.35));}
-  .mkLabel{position:absolute;left:54px;top:8px;padding:6px 10px;border-radius:12px;
-           border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.30);font-size:12px;font-weight:900;
-           white-space:nowrap;box-shadow:0 10px 22px rgba(0,0,0,.30)}
-  .mkSub{display:block;font-size:10px;font-weight:800;margin-top:2px}
+  /* Watermark */
+  .watermark{
+    position:fixed;left:14px;bottom:14px;
+    display:flex;gap:10px;align-items:center;
+    padding:10px 12px;border-radius:14px;
+    background:rgba(0,0,0,.28);
+    border:1px solid var(--stroke);
+    backdrop-filter: blur(6px);
+    z-index:9999;
+  }
+  .watermark img{width:26px;height:26px;object-fit:contain}
+  .watermark span{font-size:12px;color:var(--muted);font-weight:800}
+
+  /* ===== NEW MARKER STYLE (Pin + Glow + Label) ===== */
+  .mkWrap{position:relative;width:140px;height:40px;transform:translate(-20px,-20px);pointer-events:none}
+  .mkGlow{position:absolute;left:16px;top:18px;width:26px;height:26px;border-radius:50%;filter:blur(1px);opacity:.35}
+  .mkPin{
+    position:absolute;left:20px;top:6px;width:18px;height:18px;border-radius:50%;
+    border:3px solid #fff;box-shadow:0 10px 18px rgba(0,0,0,.35);
+  }
+  .mkTail{
+    position:absolute;left:21px;top:20px;width:0;height:0;
+    border-left:8px solid transparent;border-right:8px solid transparent;border-top:14px solid;
+    filter:drop-shadow(0 8px 10px rgba(0,0,0,.35));
+  }
+  .mkLabel{
+    position:absolute;left:50px;top:8px;
+    padding:6px 10px;border-radius:12px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.30);
+    font-size:12px;font-weight:900;white-space:nowrap;
+    box-shadow:0 10px 22px rgba(0,0,0,.30);
+  }
+  .mkSub{display:block;font-size:10px;font-weight:800;color:rgba(234,242,255,.72);margin-top:2px}
 </style>
 </head>
+
 <body>
 <div class="layout">
+
+  <!-- LEFT SIDEBAR -->
   <div class="side">
     <div class="brandRow">
-      <div class="brandLogo"><img src="/image.png"/></div>
+      <div class="brandLogo"><img src="/image.png" /></div>
       <div>
         <div class="brandTitle">ARCADIS MONITOR</div>
-        <div class="brandSub">Live status + cloud control</div>
+        <div class="brandSub">Live junction status & display control</div>
       </div>
     </div>
+
     <div class="nav">
-      <div class="btn active" id="bMap" onclick="showTab('map')">Map <small>Live</small></div>
-      <div class="btn" id="bCtl" onclick="showTab('ctl')">Control <small>Send</small></div>
+      <div class="btn active" id="bMap" onclick="showTab('map')">
+        Map <small>Live</small>
+      </div>
+      <div class="btn" id="bCtl" onclick="showTab('ctl')">
+        Control <small>Send</small>
+      </div>
     </div>
-    <div class="logout"><a href="/logout">Logout</a></div>
+
+    <div class="logout">
+      <a href="/logout">Logout</a>
+    </div>
   </div>
 
+  <!-- MAIN -->
   <div class="main">
     <div class="topbar">
       <div>
         <div style="font-weight:900;letter-spacing:.4px">CYBERABAD TRAFFIC DISPLAY MONITOR</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">1s refresh • Mongo command</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Map + device health + cloud command</div>
       </div>
+
       <div class="cards">
-        <div class="card"><div class="label">TOTAL</div><div class="n" id="total">0</div></div>
-        <div class="card"><div class="label">ONLINE</div><div class="n" id="on">0</div></div>
-        <div class="card"><div class="label">OFFLINE</div><div class="n" id="off">0</div></div>
+        <div class="card">
+          <div class="label">TOTAL DEVICES</div>
+          <div class="n" id="total">0</div>
+          <div class="badge"><span class="dot a"></span>Refresh: 1 sec</div>
+        </div>
+        <div class="card">
+          <div class="label">ONLINE</div>
+          <div class="n" id="on">0</div>
+          <div class="badge"><span class="dot g"></span>Heartbeat OK</div>
+        </div>
+        <div class="card">
+          <div class="label">OFFLINE</div>
+          <div class="n" id="off">0</div>
+          <div class="badge"><span class="dot r"></span>No heartbeat</div>
+        </div>
       </div>
     </div>
 
@@ -399,7 +520,11 @@ app.get("/dashboard", requireAuth, (req, res) => {
       <div class="wrap">
         <div class="panel">
           <div class="h">Send to Display (Cloud)</div>
-          <div class="p">SEND is disabled when selected device is OFFLINE.</div>
+          <div class="p">
+            You can operate from anywhere.
+            Dashboard stores command in MongoDB.
+            ESP will pull and apply automatically.
+          </div>
 
           <div class="grid">
             <div>
@@ -414,7 +539,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
 
           <div class="grid">
             <div>
-              <div class="hint">Signal Type</div>
+              <div class="hint">Signal Type (updates message set)</div>
               <select id="type">
                 <option value="red">RED</option>
                 <option value="amber">AMBER</option>
@@ -434,21 +559,34 @@ app.get("/dashboard", requireAuth, (req, res) => {
           </div>
 
           <div class="grid">
-            <div><div class="hint">Message Line 1</div><input id="msg1" placeholder="Enter line 1"/></div>
-            <div><div class="hint">Message Line 2</div><input id="msg2" placeholder="Enter line 2"/></div>
+            <div>
+              <div class="hint">Message Line 1</div>
+              <input id="msg1" placeholder="Enter line 1"/>
+            </div>
+            <div>
+              <div class="hint">Message Line 2</div>
+              <input id="msg2" placeholder="Enter line 2"/>
+            </div>
           </div>
 
           <div class="grid1">
-            <button id="sendBtn" onclick="sendCloudCommand()">SEND</button>
+            <button onclick="sendCloudCommand()">SEND</button>
             <div class="codebox" id="cloudOut">Status will appear here...</div>
           </div>
         </div>
       </div>
     </div>
+
   </div>
 </div>
 
+<div class="watermark">
+  <img src="/image.png" />
+  <span>Powered by Arcadis</span>
+</div>
+
 <script>
+  // Sidebar tabs
   function showTab(which){
     document.getElementById("bMap").classList.toggle("active", which==="map");
     document.getElementById("bCtl").classList.toggle("active", which==="ctl");
@@ -457,96 +595,87 @@ app.get("/dashboard", requireAuth, (req, res) => {
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
   }
 
+  // ===== MAP =====
   const map = L.map('map').setView([17.3850,78.4867], 11);
+
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
     maxZoom: 20
   }).addTo(map);
 
   const markers = new Map();
-  const deviceStatus = new Map();
 
-  function markerIcon(d){
-    const isOn = (d.status === "online");
-    const fill = isOn ? "#32ff7a" : "#ff3b3b";
-    const glow = isOn ? "rgba(50,255,122,.40)" : "rgba(255,59,59,.35)";
-    const subColor = isOn ? "rgba(50,255,122,.95)" : "rgba(255,179,179,.95)";
+  // NEW marker icon: pin + glow + label
+  function markerIcon(device_id, status){
+    const on = (status === "online");
+    const fill = on ? "#32ff7a" : "#ff3b3b";
+    const glow = on ? "rgba(50,255,122,.40)" : "rgba(255,59,59,.35)";
+    const sub = on ? "ONLINE" : "OFFLINE";
+
     return L.divIcon({
-      className:"",
-      html:\`
+      className: "",
+      html: \`
         <div class="mkWrap">
           <div class="mkGlow" style="background:\${glow}"></div>
           <div class="mkPin" style="background:\${fill}"></div>
           <div class="mkTail" style="border-top-color:\${fill}"></div>
           <div class="mkLabel">
-            \${d.device_id}
-            <span class="mkSub" style="color:\${subColor}">\${isOn ? "ONLINE" : "OFFLINE"}</span>
+            \${device_id}
+            <span class="mkSub" style="color:\${on ? 'rgba(50,255,122,.95)' : 'rgba(255,179,179,.95)'}">\${sub}</span>
           </div>
         </div>\`,
-      iconSize:[160,44],
-      iconAnchor:[30,36]
+      iconSize: [140, 40],
+      iconAnchor: [30, 34]
     });
   }
 
-  function updateSendButton(){
-    const sel = document.getElementById("deviceSelect");
-    const st = deviceStatus.get(sel.value);
-    const btn = document.getElementById("sendBtn");
-    btn.disabled = (st !== "online");
-  }
-
   async function load(){
-    const res = await fetch('/devices', { cache:"no-store" });
+    const res = await fetch('/devices', { cache: "no-store" });
     const data = await res.json();
 
+    // dropdown
     const sel = document.getElementById("deviceSelect");
-    const cur = sel.value;
-
+    const current = sel.value;
     sel.innerHTML = "";
-    deviceStatus.clear();
-
     (data||[]).forEach(d=>{
-      deviceStatus.set(d.device_id, d.status);
       const opt = document.createElement("option");
       opt.value = d.device_id;
       opt.textContent = d.device_id + " (" + d.status + ")";
       sel.appendChild(opt);
     });
-
-    if (cur) sel.value = cur;
+    if(current) sel.value = current;
 
     let on=0, off=0;
     (data||[]).forEach(d=>{
       const isOn = (d.status === "online");
       if(isOn) on++; else off++;
+
       const pos = [d.lat || 0, d.lng || 0];
-      const icon = markerIcon(d);
-      const pop = "<b>"+d.device_id+"</b>"
-        + "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>"
-        + "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+      const icon = markerIcon(d.device_id, d.status);
+
+      const pop =
+        "<b>"+d.device_id+"</b>" +
+        "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>" +
+        "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+
       if(markers.has(d.device_id)){
         markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
-      } else {
-        markers.set(d.device_id, L.marker(pos,{icon}).addTo(map).bindPopup(pop));
+      }else{
+        const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
+        markers.set(d.device_id,m);
       }
     });
 
     document.getElementById("total").innerText = (data||[]).length;
     document.getElementById("on").innerText = on;
     document.getElementById("off").innerText = off;
-
-    updateSendButton();
   }
-
-  document.getElementById("deviceSelect").addEventListener("change", updateSendButton);
 
   load();
   setInterval(load, 1000);
 
+  // ===== CONTROL: Cloud Command =====
   async function sendCloudCommand(){
-    updateSendButton();
-    if(document.getElementById("sendBtn").disabled) return;
-
     const device_id = document.getElementById("deviceSelect").value;
     const type = document.getElementById("type").value;
     const force = document.getElementById("force").value;
@@ -570,12 +699,14 @@ app.get("/dashboard", requireAuth, (req, res) => {
     }
 
     out.textContent =
-      "✅ SENT\\n" +
-      "command_id: " + j.command_id + "\\n" +
-      "ESP will pull and update in 1-2 seconds.";
+      "✅ Sent to cloud (stored in MongoDB)\\n" +
+      "command_id: " + j.command_id + "\\n\\n" +
+      "ESP will pull: /api/command/" + device_id + "\\n" +
+      "Then display updates.";
   }
 </script>
-</body></html>`);
+</body>
+</html>`);
 });
 
 // ======================
