@@ -6,7 +6,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// serve public/image.png as /image.png
+// ✅ Serve static files from /public
+// Put your logo at: public/image.png
 app.use(express.static("public"));
 
 // ======================
@@ -27,179 +28,26 @@ const deviceSchema = new mongoose.Schema({
   lat: { type: Number, default: 0 },
   lng: { type: Number, default: 0 },
   last_seen: { type: Number, default: 0 },
-  status: { type: String, default: "offline" }
+  status: { type: String, default: "offline" },
 });
-const Device = mongoose.model("Device", deviceSchema);
 
-// Latest-command model (one active command per device)
 const commandSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-  type: { type: String, default: "red" },     // red/amber/green/no
+  type: { type: String, default: "no" },        // red/amber/green/no
   msg1: { type: String, default: "" },
   msg2: { type: String, default: "" },
-  force: { type: String, default: "" },       // red/amber/green/""
-  updated_at: { type: Number, default: () => Date.now() }
+  force: { type: String, default: "" },         // red/amber/green/""
+  updated_at: { type: Number, default: 0 },
 });
+
+const Device = mongoose.model("Device", deviceSchema);
 const Command = mongoose.model("Command", commandSchema);
-
-// ======================
-// SIMPLE LOGIN (cookie)
-// ======================
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "admin123";
-
-function parseCookies(req) {
-  const raw = req.headers.cookie || "";
-  return raw.split(";").reduce((acc, part) => {
-    const p = part.trim();
-    if (!p) return acc;
-    const idx = p.indexOf("=");
-    if (idx === -1) return acc;
-    const k = decodeURIComponent(p.slice(0, idx).trim());
-    const v = decodeURIComponent(p.slice(idx + 1).trim());
-    acc[k] = v;
-    return acc;
-  }, {});
-}
-
-function requireAuth(req, res, next) {
-  const c = parseCookies(req);
-  if (c.auth === "1") return next();
-  return res.redirect("/login");
-}
 
 // ======================
 // HOME
 // ======================
-app.get("/", (req, res) => res.send("Server Running ✅"));
-
-// ======================
-// LOGIN
-// ======================
-app.get("/login", (req, res) => {
-  res.send(`<!doctype html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Login • Arcadis Monitor</title>
-<style>
-  :root{
-    --bg1:#0b1423; --bg2:#081a2c;
-    --card:rgba(255,255,255,.08);
-    --stroke:rgba(255,255,255,.14);
-    --txt:#eaf2ff; --muted:rgba(234,242,255,.72);
-    --blue:#2b8cff;
-  }
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:Segoe UI,Arial;color:var(--txt)}
-  body{
-    background:radial-gradient(1200px 800px at 20% 20%, #133a63, transparent 60%),
-               radial-gradient(900px 600px at 80% 40%, #2b8cff33, transparent 55%),
-               linear-gradient(160deg,var(--bg1),var(--bg2));
-    overflow:hidden;
-    display:grid;
-    place-items:center;
-  }
-  .blob{
-    position:absolute;
-    width:520px; height:520px; border-radius:50%;
-    background:conic-gradient(from 90deg, #2b8cff55, #32ff7a33, #ff3b3b33, #2b8cff55);
-    filter:blur(50px);
-    animation:float 8s ease-in-out infinite;
-    opacity:.55;
-  }
-  .blob.b2{width:420px;height:420px;animation-duration:10s;left:60%;top:55%;opacity:.35}
-  @keyframes float{
-    0%,100%{transform:translate(-20px,-10px) scale(1)}
-    50%{transform:translate(30px,25px) scale(1.06)}
-  }
-  .card{
-    width:min(420px,92vw);
-    background:var(--card);
-    border:1px solid var(--stroke);
-    border-radius:22px;
-    box-shadow:0 22px 60px rgba(0,0,0,.35);
-    backdrop-filter: blur(10px);
-    padding:18px;
-    position:relative;
-  }
-  .row{display:flex;gap:12px;align-items:center}
-  .logo{
-    width:52px;height:52px;border-radius:14px;
-    background:rgba(255,255,255,.10);
-    border:1px solid var(--stroke);
-    display:grid;place-items:center;overflow:hidden;
-  }
-  .logo img{width:44px;height:44px;object-fit:contain}
-  .title{font-weight:900;letter-spacing:.4px}
-  .sub{font-size:12px;color:var(--muted);margin-top:3px}
-  .form{margin-top:14px;display:grid;gap:10px}
-  input,button{
-    width:100%;padding:12px 12px;border-radius:14px;
-    border:1px solid var(--stroke);
-    background:rgba(0,0,0,.25);color:var(--txt);
-    outline:none;
-  }
-  button{
-    background:var(--blue);
-    border-color:var(--blue);
-    font-weight:900;
-    cursor:pointer;
-    transition:.15s transform;
-  }
-  button:active{transform:scale(.98)}
-  .err{font-size:12px;color:#ffb3b3;min-height:16px}
-  .foot{margin-top:10px;font-size:12px;color:var(--muted);display:flex;gap:10px;align-items:center;justify-content:space-between}
-</style>
-</head>
-<body>
-  <div class="blob" style="left:10%;top:10%"></div>
-  <div class="blob b2"></div>
-
-  <div class="card">
-    <div class="row">
-      <div class="logo"><img src="/image.png" onerror="this.style.display='none'"/></div>
-      <div>
-        <div class="title">ARCADIS • Traffic Display Monitor</div>
-        <div class="sub">Secure access</div>
-      </div>
-    </div>
-
-    <form class="form" method="POST" action="/auth">
-      <input name="username" placeholder="Username" autocomplete="username" required />
-      <input name="password" type="password" placeholder="Password" autocomplete="current-password" required />
-      <button type="submit">Login</button>
-      <div class="err" id="err"></div>
-    </form>
-
-    <div class="foot">
-      <span>Powered by Arcadis</span>
-      <span id="build"></span>
-    </div>
-  </div>
-
-<script>
-  const p = new URLSearchParams(location.search);
-  if(p.get("e")==="1") document.getElementById("err").textContent="Invalid username or password.";
-  document.getElementById("build").textContent = new Date().toLocaleString();
-</script>
-</body>
-</html>`);
-});
-
-app.post("/auth", express.urlencoded({ extended: true }), (req, res) => {
-  const { username, password } = req.body || {};
-  if (username === ADMIN_USER && password === ADMIN_PASS) {
-    res.setHeader("Set-Cookie", "auth=1; Path=/; Max-Age=604800; SameSite=Lax");
-    return res.redirect("/dashboard");
-  }
-  return res.redirect("/login?e=1");
-});
-
-app.get("/logout", (req, res) => {
-  res.setHeader("Set-Cookie", "auth=; Path=/; Max-Age=0; SameSite=Lax");
-  res.redirect("/login");
+app.get("/", (req, res) => {
+  res.send("Server Running");
 });
 
 // ======================
@@ -219,9 +67,16 @@ app.post("/register", async (req, res) => {
           lat: typeof lat === "number" ? lat : 0,
           lng: typeof lng === "number" ? lng : 0,
           last_seen: now,
-          status: "online"
-        }
+          status: "online",
+        },
       },
+      { upsert: true, new: true }
+    );
+
+    // ensure command row exists
+    await Command.findOneAndUpdate(
+      { device_id },
+      { $setOnInsert: { device_id, updated_at: 0 } },
       { upsert: true, new: true }
     );
 
@@ -232,7 +87,7 @@ app.post("/register", async (req, res) => {
 });
 
 // ======================
-// HEARTBEAT (optional lat/lng update)
+// HEARTBEAT
 // ======================
 app.post("/heartbeat", async (req, res) => {
   try {
@@ -248,9 +103,16 @@ app.post("/heartbeat", async (req, res) => {
           last_seen: now,
           status: "online",
           ...(typeof lat === "number" ? { lat } : {}),
-          ...(typeof lng === "number" ? { lng } : {})
-        }
+          ...(typeof lng === "number" ? { lng } : {}),
+        },
       },
+      { upsert: true, new: true }
+    );
+
+    // ensure command row exists
+    await Command.findOneAndUpdate(
+      { device_id },
+      { $setOnInsert: { device_id, updated_at: 0 } },
       { upsert: true, new: true }
     );
 
@@ -266,7 +128,7 @@ app.post("/heartbeat", async (req, res) => {
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    const OFFLINE_AFTER_MS = 5000;
+    const OFFLINE_AFTER_MS = 5000; // 5 sec
 
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
@@ -281,10 +143,23 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// COMMAND API (Dashboard -> DB)
+// COMMAND API (REMOTE CONTROL)
+// Dashboard -> POST /api/command
+// ESP -> GET /api/command/:device_id
 // ======================
-// Store latest command for that device (overwrite)
-app.post("/api/command", async (req, res) => {
+
+// Simple admin auth (dashboard uses this)
+// header: x-admin-user: admin
+// header: x-admin-pass: admin123
+function requireAdmin(req, res, next) {
+  const u = req.headers["x-admin-user"];
+  const p = req.headers["x-admin-pass"];
+  if (u === "admin" && p === "admin123") return next();
+  return res.status(401).json({ error: "Unauthorized" });
+}
+
+// Dashboard sends command
+app.post("/api/command", requireAdmin, async (req, res) => {
   try {
     const { device_id, type, msg1, msg2, force } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
@@ -293,252 +168,232 @@ app.post("/api/command", async (req, res) => {
     const doc = await Command.findOneAndUpdate(
       { device_id },
       {
-        $setOnInsert: { device_id },
         $set: {
-          type: type || "red",
+          device_id,
+          type: type || "no",
           msg1: msg1 || "",
           msg2: msg2 || "",
           force: force || "",
-          updated_at: now
-        }
+          updated_at: now,
+        },
       },
       { upsert: true, new: true }
     );
 
-    res.json({ ok: true, command: doc });
+    res.json({ message: "Command saved", command: doc });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
 
-// ESP polls this
+// ESP reads command (no auth so ESP can fetch easily)
 app.get("/api/command/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
     const doc = await Command.findOne({ device_id });
-    res.json({ ok: true, command: doc || null });
+    if (!doc) return res.json({ device_id, updated_at: 0, type: "no", msg1: "", msg2: "", force: "" });
+    res.json(doc);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
 
 // ======================
-// DASHBOARD (protected)
+// DASHBOARD (LOGIN + LEFT TABS + PINS + REMOTE CONTROL)
 // ======================
-app.get("/dashboard", requireAuth, (req, res) => {
-  res.send(`<!DOCTYPE html>
+app.get("/dashboard", (req, res) => {
+  res.send(`
+<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Arcadis • Traffic Display Monitor</title>
+<title>Arcadis - Junction Status</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <style>
-  :root{
-    --bg:#071422;
-    --panel:rgba(255,255,255,.07);
-    --stroke:rgba(255,255,255,.12);
-    --txt:#eaf2ff;
-    --muted:rgba(234,242,255,.72);
-    --blue:#2b8cff;
-    --green:#32ff7a;
-    --red:#ff3b3b;
-    --amber:#ffc84a;
-  }
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:var(--bg);color:var(--txt)}
-  .layout{display:grid;grid-template-columns:260px 1fr;height:100%}
-  .side{
-    border-right:1px solid var(--stroke);
-    background:linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.18));
-    padding:14px;
-    display:flex;
-    flex-direction:column;
-    gap:12px;
-  }
-  .brandRow{display:flex;align-items:center;gap:12px}
-  .brandLogo{
-    width:46px;height:46px;border-radius:14px;
-    background:rgba(255,255,255,.08);
-    border:1px solid var(--stroke);
-    overflow:hidden;
-    display:grid;place-items:center;
-  }
-  .brandLogo img{width:40px;height:40px;object-fit:contain}
-  .brandTitle{font-weight:900;letter-spacing:.3px}
+  html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:#f4f6f9}
 
-  .nav{display:grid;gap:10px;margin-top:6px}
-  .btn{
-    user-select:none;cursor:pointer;
-    padding:12px 12px;border-radius:14px;
-    background:var(--panel);
-    border:1px solid var(--stroke);
-    font-weight:900;
-    display:flex;justify-content:space-between;align-items:center;
+  /* Layout */
+  .app{height:100%;display:flex}
+  .sidebar{
+    width:220px;background:#ffffff;border-right:1px solid #e6e8ee;
+    display:flex;flex-direction:column;gap:8px;padding:12px;
   }
-  .btn.active{background:var(--blue);border-color:var(--blue)}
-  .btn small{font-weight:700;opacity:.9}
+  .logoTop{
+    display:flex;align-items:center;gap:10px;padding:6px 6px 12px 6px;
+    border-bottom:1px solid #eef0f6;
+  }
+  .logoTop img{height:34px}
+  .logoTop .t1{font-weight:900;letter-spacing:.5px}
+  .logoTop .t2{font-size:12px;color:#6b7280;margin-top:2px}
 
-  .main{display:grid;grid-template-rows:auto 1fr;min-width:0}
+  .navbtn{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 12px;border-radius:10px;
+    cursor:pointer;user-select:none;
+    border:1px solid transparent;
+    font-weight:700;color:#111827;
+  }
+  .navbtn.active{background:#eef6ff;border-color:#cfe5ff;color:#0b5ed7}
+  .navbtn:hover{background:#f6f7fb}
+
+  .content{flex:1;display:flex;flex-direction:column}
   .topbar{
-    display:flex;justify-content:space-between;gap:12px;align-items:center;
-    padding:12px 14px;border-bottom:1px solid var(--stroke);
-    background:rgba(0,0,0,.22);
-    backdrop-filter: blur(6px);
+    height:58px;background:#ffffff;border-bottom:1px solid #e6e8ee;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 14px;
   }
-  .topLeft{display:flex;flex-direction:column;gap:2px}
-  .title{font-weight:900;letter-spacing:.4px}
+  .title{font-weight:900}
+  .logout{
+    padding:8px 12px;border-radius:10px;border:1px solid #e6e8ee;
+    background:#fff;cursor:pointer;font-weight:800;
+  }
 
-  .rightBox{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .cards{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
+  .cards{
+    display:flex;gap:12px;padding:12px;background:#ffffff;border-bottom:1px solid #e6e8ee;
+  }
   .card{
-    background:var(--panel);border:1px solid var(--stroke);
-    border-radius:16px;padding:10px 14px;min-width:160px;
-    box-shadow:0 12px 28px rgba(0,0,0,.25);
+    flex:0 0 210px;background:#f8fafc;border:1px solid #e6e8ee;border-radius:12px;
+    padding:10px 12px;
   }
-  .label{font-size:11px;color:var(--muted);letter-spacing:.6px}
-  .n{font-size:26px;font-weight:900;margin-top:4px}
-  .badge{display:inline-flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--muted)}
-  .dot{width:8px;height:8px;border-radius:50%}
-  .dot.g{background:var(--green)} .dot.r{background:var(--red)} .dot.a{background:var(--amber)}
+  .card .k{font-size:12px;color:#6b7280;font-weight:800}
+  .card .v{font-size:26px;font-weight:900;margin-top:4px}
 
-  .logoutTop{
-    color:var(--txt);text-decoration:none;font-weight:900;
-    padding:10px 12px;border-radius:14px;
-    border:1px solid var(--stroke);
-    background:rgba(255,255,255,.06);
-    display:inline-block;
-  }
+  #map{flex:1}
 
-  .view{display:none;height:100%;min-height:0}
-  .view.active{display:block}
-  #map{height:100%}
+  .view{display:none;flex:1}
+  .view.active{display:flex;flex-direction:column}
 
-  .wrap{max-width:980px;margin:18px auto;padding:0 14px}
+  /* Control page */
+  .ctlwrap{padding:14px;max-width:900px}
   .panel{
-    background:var(--panel);border:1px solid var(--stroke);
-    border-radius:18px;padding:16px;
-    box-shadow:0 12px 28px rgba(0,0,0,.25);
+    background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:14px;
   }
-  .h{font-size:18px;font-weight:900}
-  .p{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
   .grid1{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
   input,select,button{
-    width:100%;padding:12px 12px;border-radius:14px;
-    border:1px solid var(--stroke);
-    background:rgba(0,0,0,.25);color:var(--txt);
-    outline:none;
+    width:100%;padding:12px;border-radius:12px;border:1px solid #e6e8ee;outline:none;
+    font-size:14px;
   }
-  button{background:var(--blue);border-color:var(--blue);font-weight:900;cursor:pointer}
-  .hint{font-size:12px;color:var(--muted)}
-  .codebox{
-    background:rgba(0,0,0,.35);border:1px solid var(--stroke);
-    border-radius:14px;padding:12px;font-family:Consolas, monospace;font-size:12px;
-    overflow:auto;white-space:pre-wrap;
-  }
+  button{background:#0b5ed7;color:#fff;border-color:#0b5ed7;font-weight:900;cursor:pointer}
+  .hint{font-size:12px;color:#6b7280}
 
+  /* Bottom-left watermark */
   .watermark{
-    position:fixed;
-    left:14px;
-    bottom:14px;
-    display:flex;
-    gap:10px;
-    align-items:center;
-    padding:10px 12px;
-    border-radius:14px;
-    background:rgba(0,0,0,.28);
-    border:1px solid var(--stroke);
-    backdrop-filter: blur(6px);
+    position:fixed;left:10px;bottom:10px;
+    background:rgba(255,255,255,.9);
+    border:1px solid #e6e8ee;border-radius:12px;
+    padding:8px 10px;display:flex;align-items:center;gap:10px;
+    box-shadow:0 10px 20px rgba(0,0,0,.08);
     z-index:9999;
   }
-  .watermark img{width:26px;height:26px;object-fit:contain}
-  .watermark span{font-size:12px;color:var(--muted);font-weight:800}
+  .watermark img{height:26px}
+  .watermark .p{font-size:12px;font-weight:900;color:#111827}
+  .watermark .s{font-size:11px;color:#6b7280;margin-top:1px}
+
+  /* Login overlay */
+  .loginOverlay{
+    position:fixed;inset:0;background:linear-gradient(135deg,#0b5ed7,#061a3a);
+    display:flex;align-items:center;justify-content:center;z-index:10000;
+  }
+  .loginCard{
+    width:min(420px,92vw);
+    background:rgba(255,255,255,.96);
+    border-radius:18px;border:1px solid rgba(255,255,255,.5);
+    padding:18px;box-shadow:0 30px 60px rgba(0,0,0,.35);
+    animation:pop .35s ease;
+  }
+  @keyframes pop{from{transform:scale(.96);opacity:.5}to{transform:scale(1);opacity:1}}
+  .loginTop{display:flex;align-items:center;gap:12px}
+  .loginTop img{height:34px}
+  .loginTop .h{font-size:18px;font-weight:1000}
+  .err{color:#b91c1c;font-size:12px;font-weight:800;margin-top:8px;display:none}
 </style>
 </head>
 
 <body>
-<div class="layout">
+
+<!-- LOGIN -->
+<div class="loginOverlay" id="loginOverlay">
+  <div class="loginCard">
+    <div class="loginTop">
+      <img src="/image.png" onerror="this.style.display='none'"/>
+      <div>
+        <div class="h">Arcadis Junction Dashboard</div>
+        <div class="hint">Login required</div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div class="hint">Username</div>
+      <input id="u" placeholder="admin"/>
+    </div>
+    <div style="margin-top:10px">
+      <div class="hint">Password</div>
+      <input id="p" type="password" placeholder="admin123"/>
+    </div>
+    <div class="err" id="err">Invalid login</div>
+    <div style="margin-top:12px">
+      <button onclick="doLogin()">Login</button>
+    </div>
+  </div>
+</div>
+
+<div class="app">
 
   <!-- LEFT SIDEBAR -->
-  <div class="side">
-    <div class="brandRow">
-      <div class="brandLogo"><img src="/image.png" /></div>
-      <div class="brandTitle">ARCADIS MONITOR</div>
+  <div class="sidebar">
+    <div class="logoTop">
+      <img src="/image.png" onerror="this.style.display='none'"/>
+      <div>
+        <div class="t1">ARCADIS</div>
+        <div class="t2">Junction status & control</div>
+      </div>
     </div>
 
-    <div class="nav">
-      <div class="btn active" id="bMap" onclick="showTab('map')">
-        Map <small>Live</small>
-      </div>
-      <div class="btn" id="bCtl" onclick="showTab('ctl')">
-        Control <small>Text/Force</small>
-      </div>
-    </div>
+    <div class="navbtn active" id="navMap" onclick="showTab('map')">🗺️ Map</div>
+    <div class="navbtn" id="navCtl" onclick="showTab('ctl')">🕹️ Control</div>
   </div>
 
   <!-- MAIN -->
-  <div class="main">
+  <div class="content">
     <div class="topbar">
-      <div class="topLeft">
-        <div class="title">CYBERABAD TRAFFIC DISPLAY MONITOR</div>
-      </div>
-
-      <div class="rightBox">
-        <div class="cards">
-          <div class="card">
-            <div class="label">TOTAL DEVICES</div>
-            <div class="n" id="total">0</div>
-            <div class="badge"><span class="dot a"></span>Refresh: 1 sec</div>
-          </div>
-          <div class="card">
-            <div class="label">ONLINE</div>
-            <div class="n" id="on">0</div>
-            <div class="badge"><span class="dot g"></span>Heartbeat OK</div>
-          </div>
-          <div class="card">
-            <div class="label">OFFLINE</div>
-            <div class="n" id="off">0</div>
-            <div class="badge"><span class="dot r"></span>No heartbeat</div>
-          </div>
-        </div>
-
-        <a class="logoutTop" href="/logout">Logout</a>
-      </div>
+      <div class="title">Live Junction Status</div>
+      <button class="logout" onclick="logout()">Logout</button>
     </div>
 
-    <div class="view active" id="viewMap"><div id="map"></div></div>
+    <div class="cards">
+      <div class="card"><div class="k">TOTAL DEVICES</div><div class="v" id="total">0</div></div>
+      <div class="card"><div class="k">ONLINE</div><div class="v" id="on">0</div></div>
+      <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
+      <div class="card"><div class="k">REFRESH</div><div class="v" style="font-size:18px;margin-top:10px">1 second</div></div>
+    </div>
 
+    <!-- MAP -->
+    <div class="view active" id="viewMap">
+      <div id="map"></div>
+    </div>
+
+    <!-- CONTROL -->
     <div class="view" id="viewCtl">
-      <div class="wrap">
+      <div class="ctlwrap">
         <div class="panel">
-          <div class="h">Control</div>
-          <div class="p">
-            This sends command to cloud. ESP pulls it and updates display automatically.
+          <div style="font-weight:1000;font-size:16px">Remote Control (Works from anywhere)</div>
+          <div class="hint" style="margin-top:6px">
+            This sends command to server → ESP reads it → display updates (no need to connect PC to ESP Wi-Fi).
           </div>
 
           <div class="grid">
             <div>
-              <div class="hint">Select Device</div>
+              <div class="hint">Device</div>
               <select id="deviceSelect"></select>
             </div>
             <div>
-              <div class="hint">Force Signal</div>
-              <select id="force">
-                <option value="">No Force</option>
-                <option value="red">Force RED</option>
-                <option value="amber">Force AMBER</option>
-                <option value="green">Force GREEN</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="grid">
-            <div>
-              <div class="hint">Signal Type (Text bucket)</div>
+              <div class="hint">Signal Type</div>
               <select id="type">
                 <option value="red">RED</option>
                 <option value="amber">AMBER</option>
@@ -546,50 +401,101 @@ app.get("/dashboard", requireAuth, (req, res) => {
                 <option value="no">NO SIGNAL</option>
               </select>
             </div>
+          </div>
+
+          <div class="grid">
             <div>
-              <div class="hint">Send Interval expectation</div>
-              <input value="ESP pulls every ~1.5 sec" readonly />
+              <div class="hint">Force Signal (optional)</div>
+              <select id="force">
+                <option value="">No Force</option>
+                <option value="red">Force RED</option>
+                <option value="amber">Force AMBER</option>
+                <option value="green">Force GREEN</option>
+              </select>
+            </div>
+            <div>
+              <div class="hint">Command status</div>
+              <input id="statusBox" readonly value="Idle"/>
             </div>
           </div>
 
           <div class="grid">
             <div>
               <div class="hint">Message Line 1</div>
-              <input id="msg1" placeholder="Enter line 1"/>
+              <input id="msg1" placeholder="Enter message line 1"/>
             </div>
             <div>
               <div class="hint">Message Line 2</div>
-              <input id="msg2" placeholder="Enter line 2"/>
+              <input id="msg2" placeholder="Enter message line 2"/>
             </div>
           </div>
 
           <div class="grid1">
-            <button onclick="sendCloudCommand()">Send to Display</button>
-            <div class="codebox" id="cloudOut">Status will appear here...</div>
+            <button onclick="sendCommand()">Send to Device</button>
           </div>
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
+<!-- Bottom-left Powered by -->
 <div class="watermark">
-  <img src="/image.png" />
-  <span>Powered by Arcadis</span>
+  <img src="/image.png" onerror="this.style.display='none'"/>
+  <div>
+    <div class="p">Powered by Arcadis</div>
+    <div class="s">Live monitoring</div>
+  </div>
 </div>
 
 <script>
+  // ===== LOGIN (UI only) =====
+  function doLogin(){
+    const u = document.getElementById("u").value.trim();
+    const p = document.getElementById("p").value.trim();
+    const ok = (u==="admin" && p==="admin123");
+    document.getElementById("err").style.display = ok ? "none" : "block";
+    if(ok){
+      localStorage.setItem("arcadis_auth_user","admin");
+      localStorage.setItem("arcadis_auth_pass","admin123");
+      document.getElementById("loginOverlay").style.display="none";
+      loadDevices();
+    }
+  }
+  function logout(){
+    localStorage.removeItem("arcadis_auth_user");
+    localStorage.removeItem("arcadis_auth_pass");
+    location.reload();
+  }
+  (function boot(){
+    const u = localStorage.getItem("arcadis_auth_user");
+    const p = localStorage.getItem("arcadis_auth_pass");
+    if(u==="admin" && p==="admin123"){
+      document.getElementById("loginOverlay").style.display="none";
+      loadDevices();
+    }
+  })();
+
+  function authHeaders(){
+    return {
+      "x-admin-user": localStorage.getItem("arcadis_auth_user") || "",
+      "x-admin-pass": localStorage.getItem("arcadis_auth_pass") || ""
+    };
+  }
+
+  // ===== TABS =====
   function showTab(which){
-    document.getElementById("bMap").classList.toggle("active", which==="map");
-    document.getElementById("bCtl").classList.toggle("active", which==="ctl");
+    document.getElementById("navMap").classList.toggle("active", which==="map");
+    document.getElementById("navCtl").classList.toggle("active", which==="ctl");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewCtl").classList.toggle("active", which==="ctl");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
   }
 
-  // MAP
-  const map = L.map('map').setView([17.3850,78.4867], 11);
+  // ===== MAP =====
+  const map = L.map('map').setView([17.3850,78.4867], 12);
+
+  // Google tiles
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
     maxZoom: 20
@@ -597,105 +503,113 @@ app.get("/dashboard", requireAuth, (req, res) => {
 
   const markers = new Map();
 
-  function makePinIcon(status){
+  // ✅ Marker pins like your screenshot (red/green pin with white circle)
+  function pinIcon(status){
     const isOn = (status === "online");
-    const fill = isOn ? "#32ff7a" : "#ff3b3b";
-    const halo = isOn ? "rgba(50,255,122,.35)" : "rgba(255,59,59,.30)";
-    return L.divIcon({
-      className:"",
-      html: \`
-      <div style="position:relative;width:28px;height:28px;transform:translate(-2px,-2px);">
-        <div style="position:absolute;left:50%;top:50%;width:32px;height:32px;border-radius:50%;background:\${halo};transform:translate(-50%,-60%);"></div>
-        <div style="position:absolute;left:50%;top:50%;width:22px;height:22px;border-radius:50%;
-                    background:\${fill};border:3px solid #fff;transform:translate(-50%,-70%);
-                    box-shadow:0 10px 18px rgba(0,0,0,.35)"></div>
-        <div style="position:absolute;left:50%;top:50%;width:0;height:0;
-                    border-left:10px solid transparent;border-right:10px solid transparent;border-top:18px solid \${fill};
-                    transform:translate(-50%,-5%);filter:drop-shadow(0 10px 10px rgba(0,0,0,.35));"></div>
-      </div>\`,
-      iconSize:[28,28],
-      iconAnchor:[14,28]
-    });
+    const fill = isOn ? "#2dbb4e" : "#d94141"; // green/red
+    const shadow = "rgba(0,0,0,.25)";
+    const html = \`
+      <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
+        <svg width="28" height="28" viewBox="0 0 64 64">
+          <path d="M32 2C20 2 10.5 11.6 10.5 23.5 10.5 40.5 32 62 32 62S53.5 40.5 53.5 23.5C53.5 11.6 44 2 32 2Z"
+                fill="\${fill}" stroke="white" stroke-width="4" style="filter:drop-shadow(0 6px 6px \${shadow});"/>
+          <circle cx="32" cy="24" r="10" fill="white" opacity="0.95"/>
+        </svg>
+      </div>\`;
+    return L.divIcon({ className:"", html, iconSize:[28,28], iconAnchor:[14,28] });
   }
 
-  async function load(){
-    const res = await fetch('/devices', { cache: "no-store" });
-    const data = await res.json();
+  async function loadDevices(){
+    try{
+      const res = await fetch('/devices');
+      const data = await res.json();
 
-    // device dropdown
-    const sel = document.getElementById("deviceSelect");
-    const current = sel.value;
-    sel.innerHTML = "";
-    (data||[]).forEach(d=>{
-      const opt = document.createElement("option");
-      opt.value = d.device_id;
-      opt.textContent = d.device_id + " (" + d.status + ")";
-      sel.appendChild(opt);
-    });
-    if(current) sel.value = current;
+      // fill dropdown
+      const sel = document.getElementById("deviceSelect");
+      const current = sel.value;
+      sel.innerHTML = "";
+      (data||[]).forEach(d=>{
+        const opt = document.createElement("option");
+        opt.value = d.device_id;
+        opt.textContent = d.device_id + " (" + d.status + ")";
+        sel.appendChild(opt);
+      });
+      if(current) sel.value = current;
 
-    let on=0, off=0;
+      let on=0, off=0;
+      (data||[]).forEach(d=>{
+        const isOn = (d.status==="online");
+        if(isOn) on++; else off++;
 
-    (data||[]).forEach(d=>{
-      const isOn = (d.status === "online");
-      if(isOn) on++; else off++;
+        const pos = [d.lat || 0, d.lng || 0];
+        const icon = pinIcon(d.status);
 
-      const pos = [d.lat || 0, d.lng || 0];
-      const icon = makePinIcon(d.status);
+        const pop =
+          "<b>"+d.device_id+"</b>" +
+          "<br>Status: <b style='color:"+(isOn?"#2dbb4e":"#d94141")+"'>"+d.status+"</b>" +
+          "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
 
-      const pop = "<b>"+d.device_id+"</b>"
-        + "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>"
-        + "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+        if(markers.has(d.device_id)){
+          markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
+        }else{
+          const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
+          markers.set(d.device_id,m);
+        }
+      });
 
-      if(markers.has(d.device_id)){
-        markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
-      }else{
-        const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
-        markers.set(d.device_id,m);
-      }
-    });
-
-    document.getElementById("total").innerText = (data||[]).length;
-    document.getElementById("on").innerText = on;
-    document.getElementById("off").innerText = off;
+      document.getElementById("total").innerText = (data||[]).length;
+      document.getElementById("on").innerText = on;
+      document.getElementById("off").innerText = off;
+    }catch(e){
+      console.log(e);
+    }
   }
 
-  load();
-  setInterval(load, 1000);
+  // refresh every 1 sec
+  setInterval(loadDevices, 1000);
 
-  async function sendCloudCommand(){
+  // ===== REMOTE CONTROL =====
+  async function sendCommand(){
     const device_id = document.getElementById("deviceSelect").value;
     const type = document.getElementById("type").value;
     const force = document.getElementById("force").value;
     const msg1 = document.getElementById("msg1").value || "";
     const msg2 = document.getElementById("msg2").value || "";
 
-    const out = document.getElementById("cloudOut");
-    out.textContent = "Sending...";
+    const statusBox = document.getElementById("statusBox");
+    statusBox.value = "Sending...";
 
-    const res = await fetch("/api/command", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ device_id, type, msg1, msg2, force })
-    });
+    try{
+      const res = await fetch("/api/command", {
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          ...authHeaders()
+        },
+        body: JSON.stringify({ device_id, type, force, msg1, msg2 })
+      });
 
-    const j = await res.json();
-    if(!res.ok){
-      out.textContent = "Error: " + (j.error || "failed");
-      return;
+      const out = await res.json();
+      if(res.ok){
+        statusBox.value = "Sent ✅";
+      }else{
+        statusBox.value = "Failed ❌ " + (out.error || "");
+      }
+    }catch(e){
+      statusBox.value = "Error ❌";
     }
-
-    out.textContent =
-      "✅ Sent to cloud. ESP will pull and apply automatically.\\n" +
-      "Updated: " + new Date(j.command.updated_at).toLocaleString();
   }
 </script>
+
 </body>
-</html>`);
+</html>
+  `);
 });
 
 // ======================
 // START
 // ======================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log("Server started on port " + PORT));
+app.listen(PORT, () => {
+  console.log("Server started on port " + PORT);
+});
