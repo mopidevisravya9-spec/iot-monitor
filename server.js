@@ -1,3 +1,7 @@
+// server.js  (FULL REPLACEMENT)
+// ✅ Includes: /login + /dashboard + /heartbeat + /devices + /api/command + /api/command/:device_id
+// ✅ Modification: DISABLE SEND when selected device is OFFLINE
+
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -5,7 +9,7 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // /public/image.png
+app.use(express.static("public"));
 
 // ======================
 // DATABASE
@@ -30,18 +34,18 @@ const Device = mongoose.model("Device", deviceSchema);
 
 const commandSchema = new mongoose.Schema({
   device_id: { type: String, required: true },
-  type: { type: String, default: "red" },     // red/amber/green/no (text set)
+  type: { type: String, default: "red" },
   msg1: { type: String, default: "" },
   msg2: { type: String, default: "" },
-  force: { type: String, default: "" },       // red/amber/green/"" (optional)
-  dur: { type: Number, default: 10000 },      // ✅ duration in ms
+  force: { type: String, default: "" },
+  dur: { type: Number, default: 10000 },
   created_at: { type: Number, default: () => Date.now() },
   delivered: { type: Boolean, default: false }
 });
 const Command = mongoose.model("Command", commandSchema);
 
 // ======================
-// SIMPLE LOGIN (cookie)
+// SIMPLE LOGIN
 // ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "admin1234";
@@ -142,7 +146,7 @@ app.get("/logout", (req, res) => {
 });
 
 // ======================
-// HEARTBEAT (ESP -> Server)
+// HEARTBEAT
 // ======================
 app.post("/heartbeat", async (req, res) => {
   try {
@@ -171,12 +175,12 @@ app.post("/heartbeat", async (req, res) => {
 });
 
 // ======================
-// DEVICES LIST
+// DEVICES
 // ======================
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    const OFFLINE_AFTER_MS = 15000; // stable 15 sec
+    const OFFLINE_AFTER_MS = 15000;
 
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
@@ -191,7 +195,7 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// COMMAND API (Dashboard -> DB)
+// COMMAND API
 // ======================
 app.post("/api/command", async (req, res) => {
   try {
@@ -214,7 +218,6 @@ app.post("/api/command", async (req, res) => {
   }
 });
 
-// ESP pulls latest undelivered command
 app.get("/api/command/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -242,7 +245,7 @@ app.get("/api/command/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD (FULL)
+// DASHBOARD (SEND DISABLED WHEN OFFLINE)
 // ======================
 app.get("/dashboard", requireAuth, (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -254,11 +257,8 @@ app.get("/dashboard", requireAuth, (req, res) => {
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  :root{
-    --bg:#071422;--panel:rgba(255,255,255,.07);--stroke:rgba(255,255,255,.12);
-    --txt:#eaf2ff;--muted:rgba(234,242,255,.72);--blue:#2b8cff;
-    --green:#32ff7a;--red:#ff3b3b;
-  }
+  :root{--bg:#071422;--panel:rgba(255,255,255,.07);--stroke:rgba(255,255,255,.12);
+        --txt:#eaf2ff;--muted:rgba(234,242,255,.72);--blue:#2b8cff;--green:#32ff7a;--red:#ff3b3b;}
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:var(--bg);color:var(--txt)}
   .layout{display:grid;grid-template-columns:260px 1fr;height:100%}
@@ -288,7 +288,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
   .view{display:none;height:100%;min-height:0}
   .view.active{display:block}
   #map{height:100%}
-
   .wrap{max-width:980px;margin:18px auto;padding:0 14px}
   .panel{background:var(--panel);border:1px solid var(--stroke);border-radius:18px;padding:16px;
          box-shadow:0 12px 28px rgba(0,0,0,.25);}
@@ -299,11 +298,11 @@ app.get("/dashboard", requireAuth, (req, res) => {
   input,select,button{width:100%;padding:12px;border-radius:14px;border:1px solid var(--stroke);
                       background:rgba(0,0,0,.25);color:var(--txt);outline:none;}
   button{background:var(--blue);border-color:var(--blue);font-weight:900;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
   .hint{font-size:12px;color:var(--muted)}
   .codebox{background:rgba(0,0,0,.35);border:1px solid var(--stroke);border-radius:14px;padding:12px;
            font-family:Consolas, monospace;font-size:12px;overflow:auto;white-space:pre-wrap;}
 
-  /* NEW MARKER STYLE */
   .mkWrap{position:relative;width:160px;height:44px;transform:translate(-22px,-26px);pointer-events:none}
   .mkGlow{position:absolute;left:18px;top:18px;width:26px;height:26px;border-radius:50%;filter:blur(1px);opacity:.35}
   .mkPin{position:absolute;left:22px;top:6px;width:18px;height:18px;border-radius:50%;
@@ -316,7 +315,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
   .mkSub{display:block;font-size:10px;font-weight:800;margin-top:2px}
 </style>
 </head>
-
 <body>
 <div class="layout">
   <div class="side">
@@ -353,7 +351,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
       <div class="wrap">
         <div class="panel">
           <div class="h">Send to Display (Cloud)</div>
-          <div class="p">Select device → type message → (optional force) → SEND. ESP will pull and update.</div>
+          <div class="p">SEND is disabled when selected device is OFFLINE.</div>
 
           <div class="grid">
             <div>
@@ -393,7 +391,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
           </div>
 
           <div class="grid1">
-            <button onclick="sendCloudCommand()">SEND</button>
+            <button id="sendBtn" onclick="sendCloudCommand()">SEND</button>
             <div class="codebox" id="cloudOut">Status will appear here...</div>
           </div>
         </div>
@@ -418,6 +416,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
   }).addTo(map);
 
   const markers = new Map();
+  const deviceStatus = new Map();
 
   function markerIcon(d){
     const isOn = (d.status === "online");
@@ -441,20 +440,33 @@ app.get("/dashboard", requireAuth, (req, res) => {
     });
   }
 
+  function updateSendButton(){
+    const sel = document.getElementById("deviceSelect");
+    const st = deviceStatus.get(sel.value);
+    const btn = document.getElementById("sendBtn");
+    btn.disabled = (st !== "online");
+  }
+
   async function load(){
     const res = await fetch('/devices', { cache:"no-store" });
     const data = await res.json();
 
     const sel = document.getElementById("deviceSelect");
     const cur = sel.value;
+
     sel.innerHTML = "";
+    deviceStatus.clear();
+
     (data||[]).forEach(d=>{
+      deviceStatus.set(d.device_id, d.status);
+
       const opt = document.createElement("option");
       opt.value = d.device_id;
       opt.textContent = d.device_id + " (" + d.status + ")";
       sel.appendChild(opt);
     });
-    if(cur) sel.value = cur;
+
+    if (cur) sel.value = cur;
 
     let on=0, off=0;
     (data||[]).forEach(d=>{
@@ -479,12 +491,20 @@ app.get("/dashboard", requireAuth, (req, res) => {
     document.getElementById("total").innerText = (data||[]).length;
     document.getElementById("on").innerText = on;
     document.getElementById("off").innerText = off;
+
+    updateSendButton();
   }
+
+  document.getElementById("deviceSelect").addEventListener("change", updateSendButton);
 
   load();
   setInterval(load, 1000);
 
   async function sendCloudCommand(){
+    updateSendButton();
+    const btn = document.getElementById("sendBtn");
+    if(btn.disabled) return;
+
     const device_id = document.getElementById("deviceSelect").value;
     const type = document.getElementById("type").value;
     const force = document.getElementById("force").value;
