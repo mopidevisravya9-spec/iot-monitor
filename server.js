@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// serve public/ (logo)
+// ✅ serve public/image.png as /image.png
 app.use(express.static("public"));
 
 // ======================
@@ -29,25 +29,27 @@ const deviceSchema = new mongoose.Schema({
   last_seen: { type: Number, default: 0 },
   status: { type: String, default: "offline" }
 });
+
 const Device = mongoose.model("Device", deviceSchema);
 
+// For “cloud commands” (dashboard -> DB). ESP must pull these to apply.
 const commandSchema = new mongoose.Schema({
   device_id: { type: String, required: true },
-  type: { type: String, default: "red" },     // which message set updates
+  type: { type: String, default: "red" },     // red/amber/green/no
   msg1: { type: String, default: "" },
   msg2: { type: String, default: "" },
-  force: { type: String, default: "" },       // red/amber/green/"" (optional)
-  dur: { type: Number, default: 10000 },      // force duration in ms
+  force: { type: String, default: "" },       // red/amber/green/""
   created_at: { type: Number, default: () => Date.now() },
   delivered: { type: Boolean, default: false }
 });
+
 const Command = mongoose.model("Command", commandSchema);
 
 // ======================
 // SIMPLE LOGIN (cookie)
 // ======================
 const ADMIN_USER = "admin";
-const ADMIN_PASS = "admin1234";
+const ADMIN_PASS = "admin123";
 
 function parseCookies(req) {
   const raw = req.headers.cookie || "";
@@ -77,7 +79,7 @@ app.get("/", (req, res) => {
 });
 
 // ======================
-// LOGIN PAGE
+// LOGIN PAGES
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
@@ -105,13 +107,12 @@ app.get("/login", (req, res) => {
     place-items:center;
   }
   .blob{
-    position:absolute;
+    position:absolute; inset:auto;
     width:520px; height:520px; border-radius:50%;
     background:conic-gradient(from 90deg, #2b8cff55, #32ff7a33, #ff3b3b33, #2b8cff55);
     filter:blur(50px);
     animation:float 8s ease-in-out infinite;
     opacity:.55;
-    left:10%; top:10%;
   }
   .blob.b2{width:420px;height:420px;animation-duration:10s;left:60%;top:55%;opacity:.35}
   @keyframes float{
@@ -158,7 +159,7 @@ app.get("/login", (req, res) => {
 </style>
 </head>
 <body>
-  <div class="blob"></div>
+  <div class="blob" style="left:10%;top:10%"></div>
   <div class="blob b2"></div>
 
   <div class="card">
@@ -184,6 +185,7 @@ app.get("/login", (req, res) => {
   </div>
 
 <script>
+  // show error if ?e=1
   const p = new URLSearchParams(location.search);
   if(p.get("e")==="1") document.getElementById("err").textContent="Invalid username or password.";
   document.getElementById("build").textContent = new Date().toLocaleString();
@@ -192,10 +194,11 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// parse form POST
+// parse form POST without extra libs
 app.post("/auth", express.urlencoded({ extended: true }), (req, res) => {
   const { username, password } = req.body || {};
   if (username === ADMIN_USER && password === ADMIN_PASS) {
+    // cookie valid for 7 days
     res.setHeader("Set-Cookie", "auth=1; Path=/; Max-Age=604800; SameSite=Lax");
     return res.redirect("/dashboard");
   }
@@ -208,8 +211,37 @@ app.get("/logout", (req, res) => {
 });
 
 // ======================
-// HEARTBEAT (ESP -> Server)
-// body: { device_id, lat?, lng? }
+// REGISTER (ESP or any device)
+// ======================
+app.post("/register", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const now = Date.now();
+    const doc = await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $setOnInsert: { device_id },
+        $set: {
+          lat: typeof lat === "number" ? lat : 0,
+          lng: typeof lng === "number" ? lng : 0,
+          last_seen: now,
+          status: "online"
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: "Registered", device: doc });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// HEARTBEAT
+// ======================
 app.post("/heartbeat", async (req, res) => {
   try {
     const { device_id, lat, lng } = req.body || {};
@@ -220,7 +252,6 @@ app.post("/heartbeat", async (req, res) => {
     await Device.findOneAndUpdate(
       { device_id },
       {
-        $setOnInsert: { device_id },
         $set: {
           last_seen: now,
           status: "online",
@@ -238,11 +269,12 @@ app.post("/heartbeat", async (req, res) => {
 });
 
 // ======================
-// DEVICES LIST (auto offline)
+// DEVICES (auto-offline FAST)
+// ======================
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    const OFFLINE_AFTER_MS = 15000; // 15 sec (stable)
+    const OFFLINE_AFTER_MS = 5000; // 5 sec
 
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
@@ -257,10 +289,13 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// CLOUD COMMAND (Dashboard -> MongoDB)
+// COMMAND API (cloud control storage)
+// ======================
+
+// Dashboard stores a command (works from anywhere)
 app.post("/api/command", async (req, res) => {
   try {
-    const { device_id, type, msg1, msg2, force, dur } = req.body || {};
+    const { device_id, type, msg1, msg2, force } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const cmd = await Command.create({
@@ -269,7 +304,6 @@ app.post("/api/command", async (req, res) => {
       msg1: msg1 || "",
       msg2: msg2 || "",
       force: force || "",
-      dur: Number(dur || 10000),
       delivered: false
     });
 
@@ -279,7 +313,7 @@ app.post("/api/command", async (req, res) => {
   }
 });
 
-// ESP pulls latest undelivered command (ESP must call this)
+// ESP would call this to fetch latest undelivered command (requires ESP change OR internet reachability)
 app.get("/api/command/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -297,7 +331,6 @@ app.get("/api/command/:device_id", async (req, res) => {
         msg1: cmd.msg1,
         msg2: cmd.msg2,
         force: cmd.force,
-        dur: cmd.dur,
         created_at: cmd.created_at
       }
     });
@@ -308,6 +341,7 @@ app.get("/api/command/:device_id", async (req, res) => {
 
 // ======================
 // DASHBOARD (protected)
+// ======================
 app.get("/dashboard", requireAuth, (req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
@@ -422,12 +456,25 @@ app.get("/dashboard", requireAuth, (req, res) => {
     border-radius:14px;padding:12px;font-family:Consolas, monospace;font-size:12px;
     overflow:auto;white-space:pre-wrap;
   }
-
-  /* Watermark */
-  .watermark{
-    position:fixed;left:14px;bottom:14px;
-    display:flex;gap:10px;align-items:center;
+  .btnRow{display:flex;gap:10px;flex-wrap:wrap}
+  .btn2{
+    display:inline-block;width:auto;
     padding:10px 12px;border-radius:14px;
+    border:1px solid var(--stroke);
+    background:rgba(255,255,255,.06);
+    color:var(--txt);text-decoration:none;font-weight:900;
+  }
+
+  /* Bottom-left watermark */
+  .watermark{
+    position:fixed;
+    left:14px;
+    bottom:14px;
+    display:flex;
+    gap:10px;
+    align-items:center;
+    padding:10px 12px;
+    border-radius:14px;
     background:rgba(0,0,0,.28);
     border:1px solid var(--stroke);
     backdrop-filter: blur(6px);
@@ -435,28 +482,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
   }
   .watermark img{width:26px;height:26px;object-fit:contain}
   .watermark span{font-size:12px;color:var(--muted);font-weight:800}
-
-  /* ===== NEW MARKER STYLE (Pin + Glow + Label) ===== */
-  .mkWrap{position:relative;width:140px;height:40px;transform:translate(-20px,-20px);pointer-events:none}
-  .mkGlow{position:absolute;left:16px;top:18px;width:26px;height:26px;border-radius:50%;filter:blur(1px);opacity:.35}
-  .mkPin{
-    position:absolute;left:20px;top:6px;width:18px;height:18px;border-radius:50%;
-    border:3px solid #fff;box-shadow:0 10px 18px rgba(0,0,0,.35);
-  }
-  .mkTail{
-    position:absolute;left:21px;top:20px;width:0;height:0;
-    border-left:8px solid transparent;border-right:8px solid transparent;border-top:14px solid;
-    filter:drop-shadow(0 8px 10px rgba(0,0,0,.35));
-  }
-  .mkLabel{
-    position:absolute;left:50px;top:8px;
-    padding:6px 10px;border-radius:12px;
-    border:1px solid rgba(255,255,255,.14);
-    background:rgba(0,0,0,.30);
-    font-size:12px;font-weight:900;white-space:nowrap;
-    box-shadow:0 10px 22px rgba(0,0,0,.30);
-  }
-  .mkSub{display:block;font-size:10px;font-weight:800;color:rgba(234,242,255,.72);margin-top:2px}
 </style>
 </head>
 
@@ -478,7 +503,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
         Map <small>Live</small>
       </div>
       <div class="btn" id="bCtl" onclick="showTab('ctl')">
-        Control <small>Send</small>
+        Control <small>Text/Force</small>
       </div>
     </div>
 
@@ -492,7 +517,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
     <div class="topbar">
       <div>
         <div style="font-weight:900;letter-spacing:.4px">CYBERABAD TRAFFIC DISPLAY MONITOR</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">Map + device health + cloud command</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Google tiles + pin markers + 1s refresh</div>
       </div>
 
       <div class="cards">
@@ -519,11 +544,11 @@ app.get("/dashboard", requireAuth, (req, res) => {
     <div class="view" id="viewCtl">
       <div class="wrap">
         <div class="panel">
-          <div class="h">Send to Display (Cloud)</div>
+          <div class="h">Control</div>
           <div class="p">
-            You can operate from anywhere.
-            Dashboard stores command in MongoDB.
-            ESP will pull and apply automatically.
+            <b>Local control</b> works when your laptop/phone is connected to that ESP Wi-Fi (ARCADIS_DISPLAY) or same LAN.
+            <br>
+            <b>Cloud control</b> stores commands in MongoDB. For the ESP to actually show it, the ESP must pull commands OR be reachable over the internet.
           </div>
 
           <div class="grid">
@@ -532,14 +557,14 @@ app.get("/dashboard", requireAuth, (req, res) => {
               <select id="deviceSelect"></select>
             </div>
             <div>
-              <div class="hint">Force Duration (ms)</div>
-              <input id="dur" type="number" value="10000" min="1000" step="500"/>
+              <div class="hint">ESP Local IP (when connected locally)</div>
+              <input id="espIp" placeholder="Example: 192.168.4.1" value="192.168.4.1"/>
             </div>
           </div>
 
           <div class="grid">
             <div>
-              <div class="hint">Signal Type (updates message set)</div>
+              <div class="hint">Signal Type (for /set)</div>
               <select id="type">
                 <option value="red">RED</option>
                 <option value="amber">AMBER</option>
@@ -548,7 +573,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
               </select>
             </div>
             <div>
-              <div class="hint">Force Signal (optional)</div>
+              <div class="hint">Force Signal (for /force)</div>
               <select id="force">
                 <option value="">No Force</option>
                 <option value="red">Force RED</option>
@@ -570,8 +595,15 @@ app.get("/dashboard", requireAuth, (req, res) => {
           </div>
 
           <div class="grid1">
-            <button onclick="sendCloudCommand()">SEND</button>
-            <div class="codebox" id="cloudOut">Status will appear here...</div>
+            <button onclick="buildLinks()">Generate Local ESP Links</button>
+            <div class="btnRow" id="buttons"></div>
+            <div class="codebox" id="out">Links will appear here...</div>
+
+            <hr style="border:0;border-top:1px solid rgba(255,255,255,.12);margin:8px 0">
+
+            <button onclick="sendCloudCommand()">Send Cloud Command (stores in MongoDB)</button>
+            <div class="hint">This stores the command. For the ESP to apply it, ESP must pull /api/command/:device_id OR be internet-reachable.</div>
+            <div class="codebox" id="cloudOut">Cloud status will appear here...</div>
           </div>
         </div>
       </div>
@@ -598,6 +630,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
   // ===== MAP =====
   const map = L.map('map').setView([17.3850,78.4867], 11);
 
+  // Google tiles
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
     maxZoom: 20
@@ -605,27 +638,25 @@ app.get("/dashboard", requireAuth, (req, res) => {
 
   const markers = new Map();
 
-  // NEW marker icon: pin + glow + label
-  function markerIcon(device_id, status){
-    const on = (status === "online");
-    const fill = on ? "#32ff7a" : "#ff3b3b";
-    const glow = on ? "rgba(50,255,122,.40)" : "rgba(255,59,59,.35)";
-    const sub = on ? "ONLINE" : "OFFLINE";
-
+  // Pin marker like your reference
+  function makePinIcon(status){
+    const isOn = (status === "online");
+    const fill = isOn ? "#32ff7a" : "#ff3b3b";
+    const halo = isOn ? "rgba(50,255,122,.35)" : "rgba(255,59,59,.30)";
     return L.divIcon({
-      className: "",
+      className:"",
       html: \`
-        <div class="mkWrap">
-          <div class="mkGlow" style="background:\${glow}"></div>
-          <div class="mkPin" style="background:\${fill}"></div>
-          <div class="mkTail" style="border-top-color:\${fill}"></div>
-          <div class="mkLabel">
-            \${device_id}
-            <span class="mkSub" style="color:\${on ? 'rgba(50,255,122,.95)' : 'rgba(255,179,179,.95)'}">\${sub}</span>
-          </div>
-        </div>\`,
-      iconSize: [140, 40],
-      iconAnchor: [30, 34]
+      <div style="position:relative;width:28px;height:28px;transform:translate(-2px,-2px);">
+        <div style="position:absolute;left:50%;top:50%;width:32px;height:32px;border-radius:50%;background:\${halo};transform:translate(-50%,-60%);filter:blur(.1px)"></div>
+        <div style="position:absolute;left:50%;top:50%;width:22px;height:22px;border-radius:50%;
+                    background:\${fill};border:3px solid #fff;transform:translate(-50%,-70%);
+                    box-shadow:0 10px 18px rgba(0,0,0,.35)"></div>
+        <div style="position:absolute;left:50%;top:50%;width:0;height:0;
+                    border-left:10px solid transparent;border-right:10px solid transparent;border-top:18px solid \${fill};
+                    transform:translate(-50%,-5%);filter:drop-shadow(0 10px 10px rgba(0,0,0,.35));"></div>
+      </div>\`,
+      iconSize:[28,28],
+      iconAnchor:[14,28]
     });
   }
 
@@ -646,17 +677,17 @@ app.get("/dashboard", requireAuth, (req, res) => {
     if(current) sel.value = current;
 
     let on=0, off=0;
+
     (data||[]).forEach(d=>{
       const isOn = (d.status === "online");
       if(isOn) on++; else off++;
 
       const pos = [d.lat || 0, d.lng || 0];
-      const icon = markerIcon(d.device_id, d.status);
+      const icon = makePinIcon(d.status);
 
-      const pop =
-        "<b>"+d.device_id+"</b>" +
-        "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>" +
-        "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+      const pop = "<b>"+d.device_id+"</b>"
+        + "<br>Status: <b style='color:"+(isOn?"#32ff7a":"#ff3b3b")+"'>"+d.status+"</b>"
+        + "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
 
       if(markers.has(d.device_id)){
         markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
@@ -674,22 +705,53 @@ app.get("/dashboard", requireAuth, (req, res) => {
   load();
   setInterval(load, 1000);
 
-  // ===== CONTROL: Cloud Command =====
+  // ===== CONTROL: Local Links (no ESP change) =====
+  function buildLinks(){
+    const ip = (document.getElementById("espIp").value || "192.168.4.1").trim();
+    const type = document.getElementById("type").value;
+    const msg1 = encodeURIComponent(document.getElementById("msg1").value || "");
+    const msg2 = encodeURIComponent(document.getElementById("msg2").value || "");
+    const force = document.getElementById("force").value;
+
+    const setUrl = "http://" + ip + "/set?type=" + type + "&msg1=" + msg1 + "&msg2=" + msg2;
+    const forceUrl = force ? ("http://" + ip + "/force?sig=" + force) : "";
+
+    const btnBox = document.getElementById("buttons");
+    btnBox.innerHTML = "";
+
+    const a1 = document.createElement("a");
+    a1.href = setUrl; a1.target = "_blank"; a1.className = "btn2";
+    a1.textContent = "Open /set (Update Text)";
+    btnBox.appendChild(a1);
+
+    if(forceUrl){
+      const a2 = document.createElement("a");
+      a2.href = forceUrl; a2.target = "_blank"; a2.className = "btn2";
+      a2.textContent = "Open /force (Force Signal)";
+      btnBox.appendChild(a2);
+    }
+
+    document.getElementById("out").textContent =
+      "SET (Update Text)\\n" + setUrl + "\\n\\n" +
+      "FORCE (Optional)\\n" + (forceUrl || "Not selected") + "\\n\\n" +
+      "NOTE: These links work only when connected to ESP Wi-Fi (ARCADIS_DISPLAY) or same LAN.";
+  }
+
+  // ===== CONTROL: Cloud Command (stored in DB) =====
   async function sendCloudCommand(){
     const device_id = document.getElementById("deviceSelect").value;
     const type = document.getElementById("type").value;
     const force = document.getElementById("force").value;
     const msg1 = document.getElementById("msg1").value || "";
     const msg2 = document.getElementById("msg2").value || "";
-    const dur = Number(document.getElementById("dur").value || 10000);
 
     const out = document.getElementById("cloudOut");
-    out.textContent = "Sending...";
+    out.textContent = "Sending cloud command...";
 
     const res = await fetch("/api/command", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ device_id, type, msg1, msg2, force, dur })
+      body: JSON.stringify({ device_id, type, msg1, msg2, force })
     });
 
     const j = await res.json();
@@ -699,10 +761,8 @@ app.get("/dashboard", requireAuth, (req, res) => {
     }
 
     out.textContent =
-      "✅ Sent to cloud (stored in MongoDB)\\n" +
-      "command_id: " + j.command_id + "\\n\\n" +
-      "ESP will pull: /api/command/" + device_id + "\\n" +
-      "Then display updates.";
+      "✅ Stored in MongoDB. command_id: " + j.command_id + "\\n\\n" +
+      "Next step: ESP must pull /api/command/" + device_id + " to apply it, OR ESP must be internet-reachable.";
   }
 </script>
 </body>
@@ -713,4 +773,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
 // START
 // ======================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log("Server started on port " + PORT));
+app.listen(PORT, () => {
+  console.log("Server started on port " + PORT);
+});
