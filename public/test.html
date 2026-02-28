@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>ESP Cloud Message Test</title>
+  <style>
+    body{margin:0;font-family:Segoe UI,Arial;background:#070b16;color:#e9eefc}
+    .wrap{max-width:880px;margin:24px auto;padding:18px}
+    .card{background:#0e1730;border:1px solid #1e2a4a;border-radius:16px;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+    h1{margin:0 0 10px 0;font-size:28px}
+    .hint{opacity:.8;font-size:13px;line-height:1.4}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+    label{font-size:12px;opacity:.8;font-weight:700}
+    input,select,button{
+      width:100%;padding:12px;border-radius:12px;
+      border:1px solid #22335f;background:#0b1220;color:#e9eefc;outline:none
+    }
+    button{cursor:pointer;background:#0b5ed7;border-color:#0b5ed7;font-weight:900}
+    button:hover{filter:brightness(1.05)}
+    .row{margin-top:12px}
+    .ok{color:#2dbb4e;font-weight:900}
+    .bad{color:#d94141;font-weight:900}
+    code{background:#0b1220;border:1px solid #22335f;padding:2px 6px;border-radius:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>ESP Cloud Message Test</h1>
+      <div class="hint">
+        Browser pushes to <code>/api/simple</code> (POST). ESP pulls from <code>/api/pull/ESP_001</code> every ~2 seconds.
+        This works from any network because it’s cloud.
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Device ID</label>
+          <input id="device" value="ESP_001"/>
+        </div>
+        <div>
+          <label>Force</label>
+          <select id="force">
+            <option>AUTO</option>
+            <option>RED</option>
+            <option>AMBER</option>
+            <option>GREEN</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Signal group</label>
+          <select id="sig">
+            <option>RED</option>
+            <option>AMBER</option>
+            <option>GREEN</option>
+            <option>NO</option>
+          </select>
+        </div>
+        <div>
+          <label>Slot</label>
+          <select id="slot">
+            <option value="0">Message 1</option>
+            <option value="1">Message 2</option>
+            <option value="2">Message 3</option>
+            <option value="3">Message 4</option>
+            <option value="4">Message 5</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>Line 1</label>
+        <input id="l1" value="HELLO FROM CLOUD"/>
+      </div>
+      <div class="row">
+        <label>Line 2</label>
+        <input id="l2" value="DRIVE SAFE"/>
+      </div>
+
+      <div class="row">
+        <button onclick="send()">Send to ESP (Cloud)</button>
+      </div>
+
+      <div class="row" id="status" class="hint"></div>
+
+      <div class="row hint">
+        After sending, open this in browser to confirm the pull endpoint is live:
+        <div style="margin-top:6px"><code id="pullUrl"></code></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  function setStatus(ok, msg){
+    const el = document.getElementById("status");
+    el.innerHTML = ok ? `<span class="ok">OK ✅</span> ${msg}` : `<span class="bad">FAIL ❌</span> ${msg}`;
+  }
+
+  async function send(){
+    const device_id = document.getElementById("device").value.trim();
+    const force = document.getElementById("force").value;
+    const sig = document.getElementById("sig").value;
+    const slot = Number(document.getElementById("slot").value);
+    const line1 = document.getElementById("l1").value;
+    const line2 = document.getElementById("l2").value;
+
+    document.getElementById("pullUrl").textContent = location.origin + "/api/pull/" + encodeURIComponent(device_id);
+
+    try{
+      const res = await fetch("/api/simple", {
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "x-admin-user":"admin",
+          "x-admin-pass":"admin123"
+        },
+        body: JSON.stringify({ device_id, force, sig, slot, line1, line2 })
+      });
+
+      const out = await res.json();
+      if(res.ok) setStatus(true, "Saved to cloud. ESP should update within 2–3 seconds.");
+      else setStatus(false, out.error || "Server rejected request");
+    }catch(e){
+      setStatus(false, "Network error (server not reachable or endpoint missing).");
+    }
+  }
+
+  // init
+  document.getElementById("pullUrl").textContent = location.origin + "/api/pull/ESP_001";
+</script>
+</body>
+</html>
