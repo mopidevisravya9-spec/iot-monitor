@@ -1,4 +1,4 @@
-// server.js  ✅ FULL WORKING CODE (Render + Mongo + Dashboard UI + Cloud Config)
+// server.js ✅ FULL WORKING CODE (Render + Mongo + Dashboard UI + Cloud Config)
 
 const express = require("express");
 const cors = require("cors");
@@ -14,7 +14,8 @@ app.use(express.static("public"));
 // ======================
 // DATABASE
 // ======================
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
 
 mongoose
   .connect(MONGO_URI)
@@ -24,7 +25,7 @@ mongoose
 // ======================
 // CONSTANTS
 // ======================
-const MSG_SLOTS = 5; // keep same as ESP (change to 10 only if ESP also changed)
+const MSG_SLOTS = 5; // keep same as ESP
 
 // ======================
 // MODELS
@@ -73,11 +74,8 @@ function defaultMessages() {
 
 const commandSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
+  force: { type: String, default: "" }, // "red" | "amber" | "green" | ""
 
-  // force: "red" | "amber" | "green" | ""
-  force: { type: String, default: "" },
-
-  // active slot per signal
   active: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
@@ -85,7 +83,6 @@ const commandSchema = new mongoose.Schema({
     no: { type: Number, default: 0 },
   },
 
-  // messages per signal (slots)
   messages: {
     red: { type: Array, default: () => defaultMessages().red },
     amber: { type: Array, default: () => defaultMessages().amber },
@@ -102,8 +99,6 @@ const Command = mongoose.model("Command", commandSchema);
 // ======================
 // ADMIN AUTH (header based)
 // ======================
-// header: x-admin-user: admin
-// header: x-admin-pass: admin123
 function requireAdmin(req, res, next) {
   const u = req.headers["x-admin-user"];
   const p = req.headers["x-admin-pass"];
@@ -214,12 +209,15 @@ app.post("/heartbeat", async (req, res) => {
 });
 
 // ======================
-// DEVICES (auto-offline FAST)
+// DEVICES (auto-offline FIXED)
 // ======================
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    const OFFLINE_AFTER_MS = 5000;
+
+    // ✅ ESP heartbeat is 10s, so offline must be > 10s
+    // Use 35s to prevent online/offline flicker
+    const OFFLINE_AFTER_MS = 35000;
 
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
@@ -316,7 +314,7 @@ app.post("/api/config", requireAdmin, async (req, res) => {
 });
 
 // ======================
-// DASHBOARD (Map + Display UI only) - NO CONTROL TAB
+// DASHBOARD (Top Tabs, Removed Degraded pill, Removed Heartbeat card)
 // ======================
 app.get("/dashboard", (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -340,48 +338,37 @@ app.get("/dashboard", (req, res) => {
   .noise{position:fixed;inset:0;z-index:-1;opacity:.06;pointer-events:none;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");}
 
-  .app{height:100%;display:flex;gap:12px;padding:12px}
-  .sidebar{
-    width:84px;background:rgba(255,255,255,.06);
-    border:1px solid rgba(255,255,255,.10);border-radius:18px;
-    backdrop-filter: blur(10px);
-    display:flex;flex-direction:column;align-items:center;padding:10px 8px;gap:10px;
-    box-shadow:0 18px 50px rgba(0,0,0,.35);
-  }
-  .navbtn{
-    width:64px;height:64px;border-radius:16px;
-    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;
-    cursor:pointer;user-select:none;border:1px solid rgba(255,255,255,.10);
-    background:rgba(255,255,255,.04);transition:.18s ease;
-  }
-  .navbtn:hover{transform:translateY(-1px);background:rgba(255,255,255,.07)}
-  .navbtn.active{
-    background:linear-gradient(135deg, rgba(11,94,215,.35), rgba(255,255,255,.06));
-    border-color: rgba(173,210,255,.35);
-    box-shadow:0 12px 30px rgba(11,94,215,.18);
-  }
-  .navico{font-size:20px}
-  .navtxt{font-size:10px;font-weight:1000;opacity:.85;letter-spacing:.6px}
-
-  .content{
+  .shell{height:100%;padding:12px;display:flex;flex-direction:column;gap:12px}
+  .frame{
     flex:1;display:flex;flex-direction:column;
     background:rgba(255,255,255,.05);
     border:1px solid rgba(255,255,255,.10);
-    border-radius:18px;backdrop-filter: blur(10px);
-    overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.35);
+    border-radius:18px;
+    backdrop-filter: blur(10px);
+    overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,.35);
   }
+
   .topbar{
-    height:62px;display:flex;align-items:center;justify-content:space-between;
+    height:64px;display:flex;align-items:center;justify-content:space-between;
     padding:0 14px;border-bottom:1px solid rgba(255,255,255,.10);
     background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
   }
-  .topLeft{display:flex;align-items:center;gap:10px;font-weight:1000;letter-spacing:.4px}
-  .pill{
-    padding:8px 10px;border-radius:999px;
+  .tabs{display:flex;gap:10px;align-items:center}
+  .tab{
+    padding:10px 14px;border-radius:14px;
     border:1px solid rgba(255,255,255,.12);
     background:rgba(255,255,255,.05);
-    font-size:12px;font-weight:1000;opacity:.9;
+    font-weight:1000;cursor:pointer;user-select:none;
+    transition:.15s ease;
   }
+  .tab:hover{transform:translateY(-1px);background:rgba(255,255,255,.08)}
+  .tab.active{
+    background:linear-gradient(135deg, rgba(11,94,215,.45), rgba(255,255,255,.06));
+    border-color: rgba(173,210,255,.35);
+    box-shadow:0 12px 30px rgba(11,94,215,.18);
+  }
+
   .logoutIcon{
     width:40px;height:40px;border-radius:14px;
     border:1px solid rgba(255,255,255,.12);
@@ -487,6 +474,7 @@ app.get("/dashboard", (req, res) => {
 <div class="bg"></div>
 <div class="noise"></div>
 
+<!-- LOGIN -->
 <div class="loginOverlay" id="loginOverlay">
   <div class="loginCard">
     <div class="loginTop">
@@ -511,24 +499,12 @@ app.get("/dashboard", (req, res) => {
   </div>
 </div>
 
-<div class="app">
-
-  <div class="sidebar">
-    <div class="navbtn active" id="navMap" onclick="showTab('map')">
-      <div class="navico">🗺️</div>
-      <div class="navtxt">MAP</div>
-    </div>
-    <div class="navbtn" id="navEsp" onclick="showTab('esp')">
-      <div class="navico">🖥️</div>
-      <div class="navtxt">DISPLAY</div>
-    </div>
-  </div>
-
-  <div class="content">
+<div class="shell">
+  <div class="frame">
     <div class="topbar">
-      <div class="topLeft">
-        <div class="pill">Junction Operations</div>
-        <div class="pill" id="liveTag">Live</div>
+      <div class="tabs">
+        <div class="tab active" id="tabMap" onclick="showTab('map')">MAP</div>
+        <div class="tab" id="tabDisp" onclick="showTab('disp')">DISPLAY</div>
       </div>
 
       <div class="logoutIcon" title="Logout" onclick="logout()">
@@ -543,19 +519,18 @@ app.get("/dashboard", (req, res) => {
       <div class="card"><div class="k">TOTAL DEVICES</div><div class="v" id="total">0</div></div>
       <div class="card"><div class="k">ONLINE</div><div class="v" id="on">0</div></div>
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
-      <div class="card"><div class="k">HEARTBEAT HEALTH</div><div class="v" id="hb">-</div></div>
     </div>
 
     <div class="view active" id="viewMap">
       <div id="map"></div>
     </div>
 
-    <div class="view" id="viewEsp">
+    <div class="view" id="viewDisp">
       <div class="ctlwrap">
         <div class="panel">
           <div style="font-weight:1100;font-size:16px">Display Configuration</div>
           <div class="hint" style="margin-top:6px">
-            Signal → Message Slot → Save → Apply ACTIVE. Force is optional and overrides signals.
+            Signal → Message Slot → Save → Apply ACTIVE. Force overrides signals.
           </div>
 
           <div class="grid">
@@ -676,12 +651,13 @@ app.get("/dashboard", (req, res) => {
   }
 
   function showTab(which){
-    document.getElementById("navMap").classList.toggle("active", which==="map");
-    document.getElementById("navEsp").classList.toggle("active", which==="esp");
-    document.getElementById("viewMap").classList.toggle("active", which==="map");
-    document.getElementById("viewEsp").classList.toggle("active", which==="esp");
-    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
-    if(which==="esp"){ setTimeout(loadConfigToUI, 0); }
+    const isMap = (which==="map");
+    document.getElementById("tabMap").classList.toggle("active", isMap);
+    document.getElementById("tabDisp").classList.toggle("active", !isMap);
+    document.getElementById("viewMap").classList.toggle("active", isMap);
+    document.getElementById("viewDisp").classList.toggle("active", !isMap);
+    if(isMap){ setTimeout(()=>map.invalidateSize(), 200); }
+    if(!isMap){ setTimeout(loadConfigToUI, 0); }
   }
 
   const map = L.map('map').setView([17.3850,78.4867], 12);
@@ -722,11 +698,10 @@ app.get("/dashboard", (req, res) => {
       });
       if(current) sel.value = current;
 
-      let on=0, off=0, lastSeenMax=0;
+      let on=0, off=0;
       (data||[]).forEach(d=>{
         const isOn = (d.status==="online");
         if(isOn) on++; else off++;
-        lastSeenMax = Math.max(lastSeenMax, d.last_seen||0);
 
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
@@ -747,14 +722,6 @@ app.get("/dashboard", (req, res) => {
       document.getElementById("total").innerText = (data||[]).length;
       document.getElementById("on").innerText = on;
       document.getElementById("off").innerText = off;
-
-      const secAgo = lastSeenMax ? Math.floor((Date.now()-lastSeenMax)/1000) : "-";
-      document.getElementById("hb").innerText = (secAgo==="-"? "-" : (secAgo + "s"));
-
-      const liveTag = document.getElementById("liveTag");
-      liveTag.textContent = on>0 ? "Live" : "Degraded";
-      liveTag.style.borderColor = on>0 ? "rgba(190,255,210,.35)" : "rgba(255,190,190,.35)";
-      liveTag.style.background = on>0 ? "rgba(45,187,78,.12)" : "rgba(217,65,65,.12)";
     }catch(e){
       console.log(e);
     }
@@ -901,7 +868,7 @@ app.get("/dashboard", (req, res) => {
 });
 
 // ======================
-// START SERVER  ✅ REQUIRED FOR RENDER
+// START SERVER ✅ REQUIRED FOR RENDER
 // ======================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server started on port " + PORT));
