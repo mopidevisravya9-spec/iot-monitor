@@ -1,77 +1,260 @@
-// server.js — FULL (MAP + DISPLAY tab, cloud push/pull, markers, no extra text)
+// server.js — FULL INTEGRATED (MAP + DISPLAY) + /dashboard + markers + slots/messages
 
 const express = require("express");
 const cors = require("cors");
+const mongoose = require("mongoose");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// IN-MEMORY STORE (No Mongo needed)
-// ===============================
+// ======================
+// DATABASE
+// ======================
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+mongoose
+  .connect(MONGO_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch((err) => console.log("DB Error:", err?.message || err));
 
-// Devices table (device_id => { device_id, lat, lng, last_seen, status })
-const DEVICES = new Map();
+// ======================
+// SETTINGS
+// ======================
+const OFFLINE_AFTER_MS = 30000; // device becomes offline if no heartbeat in 30 sec
+const MSG_SLOTS = 5;
 
-// Cloud messages table (device_id => payload)
-const CLOUD = new Map();
+// ======================
+// DEFAULT MESSAGES (slots per signal)
+// ======================
+const PRESETS = {
+  red: [
+    { l1: "STOP. LIFE HAS RIGHT OF WAY.", l2: "BRAKE NOW — LIVE LONG." },
+    { l1: "RED LIGHT: NO SHORTCUTS.", l2: "ONE MISTAKE = ONE LIFETIME." },
+    { l1: "WAIT HERE. WIN LIFE.", l2: "DON'T TRADE TIME FOR TROUBLE." },
+    { l1: "HOLD ON. STAY SAFE.", l2: "SAFETY IS ALWAYS ON TIME." },
+    { l1: "STOP MEANS SMART.", l2: "SMART DRIVERS REACH HOME." },
+  ],
+  amber: [
+    { l1: "SLOW DOWN. THINK AHEAD.", l2: "CONTROL THE SPEED." },
+    { l1: "EASE OFF. STAY ALIVE.", l2: "RUSH = RISK." },
+    { l1: "READY TO STOP.", l2: "DON'T PUSH YOUR LUCK." },
+    { l1: "CALM DRIVE. CLEAN LIFE.", l2: "YOUR FAMILY IS WAITING." },
+    { l1: "PAUSE THE THRILL.", l2: "SAVE A LIFE TODAY." },
+  ],
+  green: [
+    { l1: "GO — BUT STAY ALERT.", l2: "SAFE DISTANCE ALWAYS." },
+    { l1: "MOVE SMART, NOT FAST.", l2: "EYES ON ROAD." },
+    { l1: "GREEN IS NOT A RACE.", l2: "RESPECT EVERY LANE." },
+    { l1: "DRIVE LIKE A PRO.", l2: "INDICATE. CHECK. MOVE." },
+    { l1: "REACH HOME, NOT HEADLINES.", l2: "SAFETY FIRST." },
+  ],
+  no: [
+    { l1: "SIGNAL OFF — DRIVE SLOW.", l2: "GIVE WAY. STAY SAFE." },
+    { l1: "NO SIGNAL — USE SENSE.", l2: "FOLLOW LANE DISCIPLINE." },
+    { l1: "BE PATIENT.", l2: "AVOID HONKING & RUSHING." },
+    { l1: "WEAR HELMET.", l2: "WEAR SEAT BELT." },
+    { l1: "STOP. LOOK. GO.", l2: "SAFETY IS THE RULE." },
+  ],
+};
 
-// Offline rule (important to stop flicker)
-const OFFLINE_AFTER_MS = 35 * 1000; // 35 sec (ESP HB every 10s → safe)
-
-// ===============================
-// HELPERS
-// ===============================
-function now() {
-  return Date.now();
+function clampSlot(n) {
+  n = Number(n);
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n >= MSG_SLOTS) return MSG_SLOTS - 1;
+  return n;
 }
 
-function ensureDevice(device_id) {
-  if (!DEVICES.has(device_id)) {
-    DEVICES.set(device_id, {
-      device_id,
-      lat: 17.385,
-      lng: 78.4867,
-      last_seen: 0,
-      status: "offline",
-    });
-  }
-  return DEVICES.get(device_id);
+// ======================
+// MODELS
+// ======================
+const deviceSchema = new mongoose.Schema({
+  device_id: { type: String, unique: true, required: true },
+  lat: { type: Number, default: 0 },
+  lng: { type: Number, default: 0 },
+  last_seen: { type: Number, default: 0 },
+  status: { type: String, default: "offline" },
+});
+const Device = mongoose.model("Device", deviceSchema);
+
+const simpleSchema = new mongoose.Schema({
+  device_id: { type: String, unique: true, required: true },
+  force: { type: String, default: "" }, // ""|"red"|"amber"|"green"
+  sig: { type: String, default: "red" }, // "red"|"amber"|"green"|"no"
+  slot: { type: Number, default: 0 },
+  l1: { type: String, default: "" },
+  l2: { type: String, default: "" },
+  updated_at: { type: Number, default: 0 },
+});
+const SimpleCmd = mongoose.model("SimpleCmd", simpleSchema);
+
+async function ensureSimple(device_id) {
+  return SimpleCmd.findOneAndUpdate(
+    { device_id },
+    {
+      $setOnInsert: {
+        device_id,
+        force: "",
+        sig: "red",
+        slot: 0,
+        l1: PRESETS.red[0].l1,
+        l2: PRESETS.red[0].l2,
+        updated_at: 0,
+      },
+    },
+    { upsert: true, new: true }
+  );
 }
 
-function setOnline(device_id, lat, lng) {
-  const d = ensureDevice(device_id);
-  d.last_seen = now();
-  d.status = "online";
-  if (typeof lat === "number") d.lat = lat;
-  if (typeof lng === "number") d.lng = lng;
-}
-
-function refreshOfflineStatuses() {
-  const t = now();
-  for (const d of DEVICES.values()) {
-    if (!d.last_seen) {
-      d.status = "offline";
-      continue;
-    }
-    if (t - d.last_seen > OFFLINE_AFTER_MS) d.status = "offline";
-    else d.status = "online";
-  }
-}
-
-// ===============================
-// BASIC ENDPOINTS
-// ===============================
+// ======================
+// BASIC ROUTES
+// ======================
 app.get("/", (req, res) => res.redirect("/dashboard"));
 
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+// ESP register (optional)
+app.post("/register", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const now = Date.now();
+    const doc = await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $setOnInsert: { device_id },
+        $set: {
+          lat: typeof lat === "number" ? lat : 0,
+          lng: typeof lng === "number" ? lng : 0,
+          last_seen: now,
+          status: "online",
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await ensureSimple(device_id);
+    res.json({ message: "Registered", device: doc });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ESP heartbeat
+app.post("/heartbeat", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const now = Date.now();
+    await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $set: {
+          last_seen: now,
+          status: "online",
+          ...(typeof lat === "number" ? { lat } : {}),
+          ...(typeof lng === "number" ? { lng } : {}),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await ensureSimple(device_id);
+    res.json({ message: "OK" });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// Devices list + auto offline
+app.get("/devices", async (req, res) => {
+  try {
+    const now = Date.now();
+    await Device.updateMany(
+      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
+      { $set: { status: "offline" } }
+    );
+    const data = await Device.find().sort({ last_seen: -1 });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// SIMPLE CLOUD CONTROL (what your ESP is using)
+// ======================
+
+// Dashboard sends message to cloud (NO AUTH in this test build)
+app.post("/api/simple", async (req, res) => {
+  try {
+    const device_id = String(req.body.device_id || "").trim();
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const force = String(req.body.force || "").trim(); // "" | red | amber | green
+    const sig = String(req.body.sig || "red").trim(); // red|amber|green|no
+    const slot = clampSlot(req.body.slot);
+
+    let l1 = String(req.body.l1 || "");
+    let l2 = String(req.body.l2 || "");
+
+    // If user didn’t type lines, auto use preset lines based on sig+slot
+    const s = ["red", "amber", "green", "no"].includes(sig) ? sig : "red";
+    const preset = (PRESETS[s] && PRESETS[s][slot]) ? PRESETS[s][slot] : PRESETS.red[0];
+    if (!l1) l1 = preset.l1;
+    if (!l2) l2 = preset.l2;
+
+    const now = Date.now();
+    const doc = await SimpleCmd.findOneAndUpdate(
+      { device_id },
+      { $set: { force, sig: s, slot, l1, l2, updated_at: now } },
+      { upsert: true, new: true }
+    );
+
+    res.json({ ok: true, config: doc });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ESP pulls latest command
+app.get("/api/pull/:device_id", async (req, res) => {
+  try {
+    const device_id = req.params.device_id;
+    const doc = await ensureSimple(device_id);
+
+    res.json({
+      device_id: doc.device_id,
+      force: doc.force || "",
+      sig: doc.sig || "red",
+      slot: Number.isFinite(doc.slot) ? doc.slot : 0,
+      l1: doc.l1 || "",
+      l2: doc.l2 || "",
+      updated_at: doc.updated_at || 0,
+      slots: MSG_SLOTS,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// (Optional) expose presets so UI can auto-fill
+app.get("/api/presets", (req, res) => {
+  res.json({ slots: MSG_SLOTS, presets: PRESETS });
+});
+
+// ======================
+// DASHBOARD UI
+// ======================
 app.get("/dashboard", (req, res) => {
-  res.send(`<!DOCTYPE html>
+  res.send(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Junction Operations</title>
+<title>IoT Monitor</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -89,63 +272,79 @@ app.get("/dashboard", (req, res) => {
 
   .app{height:100%;display:flex;gap:12px;padding:12px}
   .sidebar{
-    width:92px;background:rgba(255,255,255,.06);
-    border:1px solid rgba(255,255,255,.10);border-radius:18px;
+    width:240px;
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:18px;
     backdrop-filter: blur(10px);
-    display:flex;flex-direction:column;align-items:center;padding:10px 8px;gap:10px;
     box-shadow:0 18px 50px rgba(0,0,0,.35);
+    display:flex;flex-direction:column;
+    padding:12px;
   }
-  .navbtn{
-    width:72px;height:72px;border-radius:18px;
-    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;
-    cursor:pointer;user-select:none;border:1px solid rgba(255,255,255,.10);
-    background:rgba(255,255,255,.04);transition:.18s ease;
+  .brand{
+    display:flex;align-items:center;gap:10px;
+    padding:10px 10px 14px 10px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+    margin-bottom:10px;
   }
-  .navbtn:hover{transform:translateY(-1px);background:rgba(255,255,255,.07)}
-  .navbtn.active{
-    background:linear-gradient(135deg, rgba(11,94,215,.35), rgba(255,255,255,.06));
-    border-color: rgba(173,210,255,.35);
-    box-shadow:0 12px 30px rgba(11,94,215,.18);
+  .dot{width:10px;height:10px;border-radius:50%;background:rgba(45,187,78,.9);box-shadow:0 0 14px rgba(45,187,78,.6)}
+  .brand .t{font-weight:900;letter-spacing:.4px}
+  .brand .s{font-size:12px;opacity:.7;margin-top:2px}
+
+  .nav{
+    display:flex;flex-direction:column;gap:6px;margin-top:10px;
   }
-  .navico{font-size:22px}
-  .navtxt{font-size:11px;font-weight:900;opacity:.85;letter-spacing:.6px}
+  .nav a{
+    text-decoration:none;color:#e9eefc;
+    display:flex;align-items:center;gap:10px;
+    padding:12px 12px;
+    border-radius:14px;
+    border:1px solid transparent;
+    transition:.15s ease;
+    opacity:.92;
+  }
+  .nav a:hover{background:rgba(255,255,255,.06)}
+  .nav a.active{
+    background:linear-gradient(135deg, rgba(11,94,215,.32), rgba(255,255,255,.05));
+    border-color: rgba(173,210,255,.25);
+    box-shadow:0 12px 30px rgba(11,94,215,.16);
+    opacity:1;
+  }
+  .ico{width:28px;height:28px;border-radius:10px;display:grid;place-items:center;
+    background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10)}
+  .lbl{font-weight:800;letter-spacing:.2px}
+  .sub{font-size:12px;opacity:.7;margin-top:2px}
 
   .content{
     flex:1;display:flex;flex-direction:column;
     background:rgba(255,255,255,.05);
     border:1px solid rgba(255,255,255,.10);
-    border-radius:18px;backdrop-filter: blur(10px);
-    overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.35);
+    border-radius:18px;
+    backdrop-filter: blur(10px);
+    overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,.35);
   }
-
   .topbar{
     height:62px;display:flex;align-items:center;justify-content:space-between;
     padding:0 14px;border-bottom:1px solid rgba(255,255,255,.10);
     background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
   }
-  .topLeft{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:.4px}
-  .pill{
-    padding:8px 10px;border-radius:999px;
-    border:1px solid rgba(255,255,255,.12);
-    background:rgba(255,255,255,.05);
-    font-size:12px;font-weight:900;opacity:.9;
-  }
+  .rightActions{display:flex;gap:10px;align-items:center}
   .iconBtn{
-    width:40px;height:40px;border-radius:14px;
+    width:42px;height:42px;border-radius:14px;
     border:1px solid rgba(255,255,255,.12);
     background:rgba(255,255,255,.06);
     display:flex;align-items:center;justify-content:center;
-    cursor:pointer;transition:.18s ease;
+    cursor:pointer;transition:.15s ease;
   }
-  .iconBtn:hover{transform:translateY(-1px);background:rgba(255,255,255,.09)}
-  .iconBtn svg{opacity:.9}
+  .iconBtn:hover{transform:translateY(-1px);background:rgba(255,255,255,.10)}
 
   .cards{
     display:flex;gap:12px;padding:12px;border-bottom:1px solid rgba(255,255,255,.10);
     flex-wrap:wrap;background:rgba(255,255,255,.03);
   }
   .card{
-    flex:0 0 240px;border-radius:16px;border:1px solid rgba(255,255,255,.10);
+    flex:0 0 260px;border-radius:16px;border:1px solid rgba(255,255,255,.10);
     background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
     padding:12px 12px;box-shadow:0 14px 34px rgba(0,0,0,.25);
     position:relative;overflow:hidden;
@@ -156,23 +355,25 @@ app.get("/dashboard", (req, res) => {
     opacity:.7;
   }
   .card .k{font-size:11px;opacity:.75;font-weight:900;letter-spacing:.8px;position:relative}
-  .card .v{font-size:30px;font-weight:1000;margin-top:6px;position:relative}
+  .card .v{font-size:28px;font-weight:1000;margin-top:6px;position:relative}
 
-  .view{display:none;flex:1}
+  .view{display:none;flex:1;min-height:0}
   .view.active{display:flex;flex-direction:column}
-  #map{flex:1}
+  #map{flex:1;min-height:0}
 
-  .pane{padding:14px;max-width:1120px}
+  .panelWrap{padding:14px;overflow:auto}
   .panel{
+    max-width:1100px;
     background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
     border:1px solid rgba(255,255,255,.10);
-    border-radius:18px;padding:14px;
+    border-radius:18px;padding:16px;
     box-shadow:0 18px 50px rgba(0,0,0,.30);
   }
-  .hint{font-size:12px;opacity:.75;line-height:1.35}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-
+  .panelTitle{font-size:22px;font-weight:1000;margin-bottom:6px}
+  .panelHint{font-size:13px;opacity:.75;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  label{font-size:12px;opacity:.8;font-weight:900;letter-spacing:.6px}
   input,select,button{
     width:100%;padding:12px;border-radius:14px;
     border:1px solid rgba(255,255,255,.12);
@@ -186,15 +387,15 @@ app.get("/dashboard", (req, res) => {
     font-weight:1000;transition:.15s ease;
   }
   button:hover{transform:translateY(-1px)}
-  .status{margin-top:10px;font-weight:900;font-size:12px;opacity:.9}
+  .statusLine{margin-top:10px;font-size:13px;opacity:.85}
+  .ok{color:#2dbb4e;font-weight:900}
+  .bad{color:#d94141;font-weight:900}
 
-  .mini{
-    padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);
-    background:rgba(255,255,255,.05);font-size:12px;font-weight:900;
-  }
-
-  @media (max-width: 920px){
-    .card{flex:1 1 160px}
+  @media (max-width: 980px){
+    .sidebar{width:86px;padding:10px}
+    .brand{display:none}
+    .lbl,.sub{display:none}
+    .cards .card{flex:1 1 180px}
     .grid{grid-template-columns:1fr}
   }
 </style>
@@ -204,24 +405,39 @@ app.get("/dashboard", (req, res) => {
 <div class="bg"></div><div class="noise"></div>
 
 <div class="app">
-  <div class="sidebar">
-    <div class="navbtn active" id="navMap" onclick="showTab('map')">
-      <div class="navico">🗺️</div><div class="navtxt">MAP</div>
-    </div>
-    <div class="navbtn" id="navDisplay" onclick="showTab('display')">
-      <div class="navico">🖥️</div><div class="navtxt">DISPLAY</div>
-    </div>
-  </div>
-
-  <div class="content">
-    <div class="topbar">
-      <div class="topLeft">
-        <div class="pill">Junction Operations</div>
-        <div class="pill" id="liveTag">Live</div>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="dot"></div>
+      <div>
+        <div class="t">IoT Monitor</div>
+        <div class="s">Operations Console</div>
       </div>
+    </div>
 
-      <div style="display:flex;gap:10px">
-        <div class="iconBtn" title="Refresh" onclick="loadDevices(true)">
+    <nav class="nav">
+      <a href="#" id="navMap" class="active" onclick="showTab('map');return false;">
+        <div class="ico">🗺️</div>
+        <div>
+          <div class="lbl">MAP</div>
+          <div class="sub">Markers + status</div>
+        </div>
+      </a>
+
+      <a href="#" id="navDisp" onclick="showTab('disp');return false;">
+        <div class="ico">🖥️</div>
+        <div>
+          <div class="lbl">DISPLAY</div>
+          <div class="sub">Cloud messages</div>
+        </div>
+      </a>
+    </nav>
+  </aside>
+
+  <main class="content">
+    <div class="topbar">
+      <div style="font-weight:1000;letter-spacing:.3px;opacity:.9"> </div>
+      <div class="rightActions">
+        <div class="iconBtn" title="Refresh now" onclick="loadDevices(true)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
             <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="white" stroke-width="2" stroke-linecap="round"/>
             <path d="M21 3v6h-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -242,25 +458,23 @@ app.get("/dashboard", (req, res) => {
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
     </div>
 
-    <div class="view active" id="viewMap">
+    <section class="view active" id="viewMap">
       <div id="map"></div>
-    </div>
+    </section>
 
-    <div class="view" id="viewDisplay">
-      <div class="pane">
+    <section class="view" id="viewDisp">
+      <div class="panelWrap">
         <div class="panel">
-          <div style="font-weight:1000;font-size:18px">Cloud Message Control</div>
-          <div class="hint" style="margin-top:6px">
-            Pick device → pick signal → pick slot → messages auto-fill → send.
-          </div>
+          <div class="panelTitle">Cloud Message Control</div>
+          <div class="panelHint">Pick device → pick signal → pick slot → lines auto-fill → send.</div>
 
           <div class="grid">
             <div>
-              <div class="hint">Device</div>
+              <label>Device</label>
               <select id="devSel"></select>
             </div>
             <div>
-              <div class="hint">Force</div>
+              <label>Force</label>
               <select id="forceSel">
                 <option value="">AUTO</option>
                 <option value="red">RED</option>
@@ -270,53 +484,64 @@ app.get("/dashboard", (req, res) => {
             </div>
           </div>
 
+          <div style="height:10px"></div>
+
           <div class="grid">
             <div>
-              <div class="hint">Signal group</div>
-              <select id="sigSel"></select>
+              <label>Signal group</label>
+              <select id="sigSel">
+                <option value="red">RED → STOP</option>
+                <option value="amber">AMBER → WAIT</option>
+                <option value="green">GREEN → GO</option>
+                <option value="no">NO SIGNAL</option>
+              </select>
             </div>
             <div>
-              <div class="hint">Slot</div>
+              <label>Slot</label>
               <select id="slotSel"></select>
             </div>
           </div>
 
+          <div style="height:10px"></div>
+
           <div class="grid">
             <div>
-              <div class="hint">Line 1</div>
+              <label>Line 1</label>
               <input id="l1" />
             </div>
             <div>
-              <div class="hint">Line 2</div>
+              <label>Line 2</label>
               <input id="l2" />
             </div>
           </div>
 
-          <div class="row" style="margin-top:12px">
-            <button onclick="sendCloud()">Send to ESP (Cloud)</button>
-          </div>
+          <div style="height:12px"></div>
 
-          <div class="status" id="status">Status: Idle</div>
+          <button onclick="sendToCloud()">Send to ESP (Cloud)</button>
+          <div class="statusLine" id="sendStatus">Status: <span>Idle</span></div>
         </div>
       </div>
-    </div>
-
-  </div>
+    </section>
+  </main>
 </div>
 
 <script>
-  // ====== “Logout” is just a reload (you can add auth later) ======
-  function logout(){ location.reload(); }
+  // ========= auth stub (kept minimal)
+  function logout(){
+    localStorage.clear();
+    location.reload();
+  }
 
+  // ========= tabs
   function showTab(which){
     document.getElementById("navMap").classList.toggle("active", which==="map");
-    document.getElementById("navDisplay").classList.toggle("active", which==="display");
+    document.getElementById("navDisp").classList.toggle("active", which==="disp");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
-    document.getElementById("viewDisplay").classList.toggle("active", which==="display");
+    document.getElementById("viewDisp").classList.toggle("active", which==="disp");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
   }
 
-  // ====== MAP ======
+  // ========= map
   const map = L.map('map').setView([17.3850,78.4867], 12);
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
@@ -324,7 +549,6 @@ app.get("/dashboard", (req, res) => {
   }).addTo(map);
 
   const markers = new Map();
-
   function pinIcon(status){
     const isOn = (status === "online");
     const fill = isOn ? "#2dbb4e" : "#d94141";
@@ -340,12 +564,43 @@ app.get("/dashboard", (req, res) => {
     return L.divIcon({ className:"", html, iconSize:[28,28], iconAnchor:[14,28] });
   }
 
-  async function loadDevices(manual=false){
+  // ========= presets
+  let PRESETS = null;
+  async function loadPresets(){
+    const r = await fetch("/api/presets");
+    PRESETS = await r.json();
+  }
+
+  function buildSlotOptions(sig){
+    const slotSel = document.getElementById("slotSel");
+    slotSel.innerHTML = "";
+    const list = (PRESETS && PRESETS.presets && PRESETS.presets[sig]) ? PRESETS.presets[sig] : [];
+    const slots = (PRESETS && PRESETS.slots) ? PRESETS.slots : (list.length || 5);
+    for(let i=0;i<slots;i++){
+      const it = list[i] || {l1:"",l2:""};
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = (i+1) + ". " + (it.l1 || ("Message " + (i+1)));
+      slotSel.appendChild(opt);
+    }
+  }
+
+  function autofillLines(){
+    const sig = document.getElementById("sigSel").value;
+    const slot = Number(document.getElementById("slotSel").value || 0);
+    const it = (PRESETS && PRESETS.presets && PRESETS.presets[sig] && PRESETS.presets[sig][slot])
+      ? PRESETS.presets[sig][slot]
+      : {l1:"",l2:""};
+    document.getElementById("l1").value = it.l1 || "";
+    document.getElementById("l2").value = it.l2 || "";
+  }
+
+  // ========= devices + markers + dropdown
+  async function loadDevices(nowClick){
     try{
-      const res = await fetch('/devices');
+      const res = await fetch("/devices");
       const data = await res.json();
 
-      // markers + counts
       let on=0, off=0;
       (data||[]).forEach(d=>{
         const isOn = (d.status==="online");
@@ -357,7 +612,7 @@ app.get("/dashboard", (req, res) => {
         const pop =
           "<b>"+d.device_id+"</b>" +
           "<br>Status: <b style='color:"+(isOn?"#2dbb4e":"#d94141")+"'>"+d.status+"</b>" +
-          "<br>Last seen: " + (d.last_seen ? new Date(d.last_seen).toLocaleString() : "-");
+          "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
 
         if(markers.has(d.device_id)){
           markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
@@ -371,227 +626,79 @@ app.get("/dashboard", (req, res) => {
       document.getElementById("on").innerText = on;
       document.getElementById("off").innerText = off;
 
-      // live tag
-      const liveTag = document.getElementById("liveTag");
-      liveTag.textContent = on>0 ? "Live" : "Degraded";
-      liveTag.style.borderColor = on>0 ? "rgba(190,255,210,.35)" : "rgba(255,190,190,.35)";
-      liveTag.style.background = on>0 ? "rgba(45,187,78,.12)" : "rgba(217,65,65,.12)";
-
-      // device dropdown for DISPLAY tab
-      const sel = document.getElementById("devSel");
-      const prev = sel.value;
-      sel.innerHTML = "";
+      // device dropdown
+      const devSel = document.getElementById("devSel");
+      const cur = devSel.value;
+      devSel.innerHTML = "";
       (data||[]).forEach(d=>{
         const opt = document.createElement("option");
         opt.value = d.device_id;
-        opt.textContent = d.device_id + " (" + d.status + ")";
-        sel.appendChild(opt);
+        opt.textContent = d.device_id + (d.status ? (" ("+d.status+")") : "");
+        devSel.appendChild(opt);
       });
-      if(prev) sel.value = prev;
+      if(cur) devSel.value = cur;
 
+      if(nowClick && data && data[0] && markers.has(data[0].device_id)){
+        // optional focus
+      }
     }catch(e){
       console.log(e);
     }
   }
+  setInterval(loadDevices, 2000);
 
-  setInterval(loadDevices, 3000);
-  loadDevices(true);
+  // ========= send to cloud
+  async function sendToCloud(){
+    const device_id = document.getElementById("devSel").value;
+    const force = document.getElementById("forceSel").value;
+    const sig = document.getElementById("sigSel").value;
+    const slot = Number(document.getElementById("slotSel").value || 0);
+    const l1 = document.getElementById("l1").value || "";
+    const l2 = document.getElementById("l2").value || "";
 
-  // ====== DISPLAY TAB (dynamic messages by color + slot) ======
-  const PACK = {
-    red: [
-      ["STOP NOW. LIVE LONG.", "HIT BRAKES, NOT LIVES."],
-      ["RED LIGHT = LIFE LINE.", "DON'T CROSS DESTINY."],
-      ["ONE SECOND RUSH", "CAN COST A LIFETIME."],
-      ["BRAKE EARLY.", "ARRIVE SAFELY."],
-      ["STAY BEHIND THE LINE.", "STAY IN YOUR LIFE."],
-      ["STOP HERE.", "START LIVING."],
-      ["DON’T RACE THE SIGNAL.", "RACE TO HOME SAFE."],
-      ["WAIT. WATCH. WIN.", "SAFETY ALWAYS."],
-    ],
-    amber: [
-      ["SLOW DOWN.", "DANGER DOESN’T WARN."],
-      ["EASE OFF SPEED.", "KEEP CONTROL."],
-      ["AMBER SAYS: THINK.", "YOUR FAMILY WAITS."],
-      ["NOT WORTH THE RISK.", "TAKE THE NEXT GREEN."],
-      ["HOLD ON.", "SAVE A LIFE."],
-      ["CAUTION MODE.", "EYES ON ROAD."],
-      ["SLOW IS SMART.", "SMART IS SAFE."],
-      ["BE PATIENT.", "BE ALIVE."],
-    ],
-    green: [
-      ["GO — BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
-      ["GREEN IS NOT RACE.", "MOVE WITH CARE."],
-      ["REACH HOME.", "NOT HEADLINES."],
-      ["WATCH MIRRORS.", "WATCH LANE."],
-      ["SMOOTH DRIVE.", "SAFE DRIVE."],
-      ["FOLLOW LINES.", "FOLLOW LIFE."],
-      ["NO PHONE.", "FULL FOCUS."],
-      ["RESPECT SPEED.", "PROTECT LIFE."],
-    ],
-    no: [
-      ["SIGNAL OFF.", "DRIVE SLOW."],
-      ["GIVE WAY.", "NO HURRY."],
-      ["KEEP LEFT.", "KEEP SAFE."],
-      ["WATCH ALL SIDES.", "CROSS CAREFULLY."],
-      ["NO SIGNAL.", "USE COMMON SENSE."],
-      ["SLOW & STEADY.", "SAFE & READY."],
-      ["BE KIND ON ROAD.", "BE SAFE AT HOME."],
-      ["STOP, LOOK, GO.", "RULES SAVE YOU."],
-    ]
-  };
-
-  const SIGS = [
-    {key:"red",   label:"RED → STOP"},
-    {key:"amber", label:"AMBER → WAIT"},
-    {key:"green", label:"GREEN → GO"},
-    {key:"no",    label:"NO SIGNAL"},
-  ];
-
-  const sigSel = document.getElementById("sigSel");
-  SIGS.forEach(s=>{
-    const o=document.createElement("option");
-    o.value=s.key; o.textContent=s.label;
-    sigSel.appendChild(o);
-  });
-
-  const slotSel = document.getElementById("slotSel");
-
-  function rebuildSlots(){
-    const s = sigSel.value;
-    const arr = PACK[s] || [];
-    slotSel.innerHTML = "";
-
-    // Use “real” labels (not Message 1..)
-    arr.forEach((pair, idx)=>{
-      const o=document.createElement("option");
-      o.value=String(idx);
-      o.textContent = (idx+1) + ". " + pair[0];
-      slotSel.appendChild(o);
-    });
-
-    slotSel.value = "0";
-    fillLinesFromSlot();
-  }
-
-  function fillLinesFromSlot(){
-    const s = sigSel.value;
-    const i = Number(slotSel.value || 0);
-    const pair = (PACK[s] && PACK[s][i]) ? PACK[s][i] : ["",""];
-    document.getElementById("l1").value = pair[0];
-    document.getElementById("l2").value = pair[1];
-  }
-
-  sigSel.addEventListener("change", rebuildSlots);
-  slotSel.addEventListener("change", fillLinesFromSlot);
-  rebuildSlots();
-
-  async function sendCloud(){
-    const device_id = document.getElementById("devSel").value || "ESP_001";
-    const force = document.getElementById("forceSel").value || "";
-    const sig = sigSel.value;
-    const slot = Number(slotSel.value || 0);
-    const line1 = document.getElementById("l1").value || "";
-    const line2 = document.getElementById("l2").value || "";
-
-    const status = document.getElementById("status");
-    status.textContent = "Status: Sending...";
+    const st = document.getElementById("sendStatus");
+    st.innerHTML = "Status: <span>Sending…</span>";
 
     try{
-      const res = await fetch("/api/simple", {
+      const r = await fetch("/api/simple", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ device_id, force, sig, slot, line1, line2 })
+        body: JSON.stringify({ device_id, force, sig, slot, l1, l2 })
       });
-      const out = await res.json();
-      if(res.ok){
-        status.textContent = "Status: Sent ✅";
+      const out = await r.json();
+      if(r.ok){
+        st.innerHTML = "Status: <span class='ok'>Sent ✅</span>";
       }else{
-        status.textContent = "Status: Failed ❌ " + (out.error || "");
+        st.innerHTML = "Status: <span class='bad'>Failed ❌</span> " + (out.error||"");
       }
     }catch(e){
-      status.textContent = "Status: Network error ❌";
+      st.innerHTML = "Status: <span class='bad'>Network error ❌</span>";
     }
   }
+
+  // ========= init
+  (async function init(){
+    await loadPresets();
+    buildSlotOptions("red");
+    autofillLines();
+
+    document.getElementById("sigSel").addEventListener("change", ()=>{
+      const s = document.getElementById("sigSel").value;
+      buildSlotOptions(s);
+      document.getElementById("slotSel").value = "0";
+      autofillLines();
+    });
+    document.getElementById("slotSel").addEventListener("change", autofillLines);
+
+    await loadDevices(true);
+  })();
 </script>
 </body>
 </html>`);
 });
 
-// ===============================
-// REGISTER + HEARTBEAT (ESP calls these)
-// ===============================
-
-// optional: register
-app.post("/register", (req, res) => {
-  const { device_id, lat, lng } = req.body || {};
-  if (!device_id) return res.status(400).json({ error: "device_id required" });
-  setOnline(device_id, lat, lng);
-  res.json({ ok: true });
-});
-
-app.post("/heartbeat", (req, res) => {
-  const { device_id, lat, lng } = req.body || {};
-  if (!device_id) return res.status(400).json({ error: "device_id required" });
-  setOnline(device_id, lat, lng);
-  res.json({ ok: true });
-});
-
-// ===============================
-// DEVICES LIST (Dashboard uses this)
-// ===============================
-app.get("/devices", (req, res) => {
-  refreshOfflineStatuses();
-  const out = Array.from(DEVICES.values()).sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
-  res.json(out);
-});
-
-// ===============================
-// CLOUD SIMPLE API (Dashboard -> Server)
-// ===============================
-app.post("/api/simple", (req, res) => {
-  try {
-    const { device_id, force, sig, slot, line1, line2 } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    // Save cloud payload for ESP pull
-    CLOUD.set(device_id, {
-      device_id,
-      force: force || "",
-      sig: sig || "red",
-      slot: Number.isFinite(slot) ? slot : 0,
-      line1: String(line1 || ""),
-      line2: String(line2 || ""),
-      updated_at: Date.now(),
-    });
-
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ===============================
-// CLOUD PULL API (ESP -> Server)
-// ===============================
-app.get("/api/pull/:device_id", (req, res) => {
-  const device_id = req.params.device_id;
-  const payload =
-    CLOUD.get(device_id) ||
-    {
-      device_id,
-      force: "",
-      sig: "red",
-      slot: 0,
-      line1: "DEFAULT MESSAGE",
-      line2: "DRIVE SAFE",
-      updated_at: 0,
-    };
-  res.json(payload);
-});
-
-// ===============================
-// START SERVER (Render needs this)
-// ===============================
+// ======================
+// START SERVER ✅ REQUIRED FOR RENDER
+// ======================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server started on port " + PORT));
