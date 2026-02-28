@@ -1,5 +1,5 @@
-// server.js ✅ FULL (LIGHT THEME + SIDEBAR TOGGLE + POWERED BY ARCADIS + LOGO FALLBACKS)
-// Put Arcadis logo in: public/arcadis.png  (or keep public/image.png / public/logo.png)
+// server.js ✅ FULL (LIGHT THEME ORANGE+WHITE + TIMES NEW ROMAN + NO TOP ICONS + NO TAB ICONS + POWERED BY ARCADIS + LOGO FALLBACKS)
+// Put Arcadis logo in: public/arcadis.png  (fallbacks: public/image.png, public/logo.png)
 
 const express = require("express");
 const cors = require("cors");
@@ -285,7 +285,7 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD (LIGHT THEME + SIDEBAR TOGGLE)
+// DASHBOARD ✅ (LIGHT ORANGE+WHITE + TIMES NEW ROMAN + LEFT TABS TEXT ONLY + NO TOP ICONS + POWERED BY ARCADIS + LOGO FALLBACKS)
 // ======================
 app.get("/dashboard", (req, res) => {
   res.send(`<!doctype html>
@@ -300,137 +300,145 @@ app.get("/dashboard", (req, res) => {
 
 <style>
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:#eef3ff;color:#0f172a;overflow:hidden}
+  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
 
-  .app{height:100%;display:flex;gap:12px;padding:12px}
-
-  /* Sidebar */
-  .sidebar{
-    width:280px;min-width:280px;
-    background:#ffffff;
-    border:1px solid #dbe3ff;border-radius:18px;
-    display:flex;flex-direction:column;padding:14px 12px;gap:14px;
-    box-shadow:0 14px 40px rgba(15,23,42,.12);
-    transition:width .2s ease, min-width .2s ease, transform .2s ease;
+  :root{
+    --orange:#f97316;
+    --orange2:#fb923c;
+    --bg:#fff7ed;        /* light orange background */
+    --card:#ffffff;
+    --border:#fed7aa;    /* soft orange border */
+    --muted:#6b7280;
   }
-  .sidebar.collapsed{width:80px;min-width:80px}
-  .brand{display:flex;align-items:center;gap:12px;padding:6px 6px 2px 6px}
-  .brand img{width:46px;height:46px;border-radius:12px;background:#fff;object-fit:contain;padding:6px;border:1px solid #e5e7eb}
-  .brandTitle{font-size:18px;font-weight:900;letter-spacing:.2px}
-  .brandSub{font-size:12px;color:#64748b;margin-top:2px}
-  .brandText{display:flex;flex-direction:column}
-  .sidebar.collapsed .brandText{display:none}
-  .divider{height:1px;background:#e5e7eb;margin:2px 6px 0 6px}
+
+  .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
+
+  /* SIDEBAR */
+  .sidebar{
+    width:260px;min-width:260px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    display:flex;flex-direction:column;
+    padding:14px 12px;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
+  .brand img{
+    width:46px;height:46px;border-radius:12px;
+    background:#fff;object-fit:contain;padding:6px;
+    border:1px solid var(--border)
+  }
+  .brandTitle{font-size:16px;font-weight:700}
+  .brandSub{font-size:12px;color:var(--muted);margin-top:2px}
+  .divider{height:1px;background:var(--border);margin:8px 6px}
 
   .tabBtn{
-    width:100%;padding:14px 14px;border-radius:16px;
-    display:flex;align-items:center;gap:12px;
-    cursor:pointer;user-select:none;border:1px solid #e5e7eb;
-    background:#f8fafc;transition:.15s ease;
+    width:100%;
+    padding:14px 14px;
+    border-radius:14px;
+    cursor:pointer;
+    user-select:none;
+    border:1px solid var(--border);
+    background:#fff;
+    font-weight:700;
+    letter-spacing:.5px;
+    transition:.12s ease;
   }
-  .tabBtn:hover{transform:translateY(-1px);background:#f1f5ff}
+  .tabBtn + .tabBtn{margin-top:10px}
+  .tabBtn:hover{transform:translateY(-1px)}
   .tabBtn.active{
-    background:linear-gradient(135deg, #e6efff, #ffffff);
-    border-color:#bfd3ff;
-    box-shadow:0 12px 28px rgba(37,99,235,.12);
+    background:linear-gradient(135deg, var(--orange), var(--orange2));
+    color:#fff;
+    border-color:var(--orange2);
+    box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-  .ico{
-    width:42px;height:42px;border-radius:14px;
-    background:#ffffff;border:1px solid #e5e7eb;
-    display:flex;align-items:center;justify-content:center;
-  }
-  .ico span{font-size:20px}
-  .tabTxtWrap{display:flex;flex-direction:column;gap:2px}
-  .tabTxt{font-size:14px;font-weight:900;letter-spacing:.4px}
-  .sidebar.collapsed .tabTxtWrap{display:none}
 
-  /* footer */
   .footer{
     margin-top:auto;
-    padding:8px 10px;
-    color:#64748b;
+    padding:10px 10px 4px 10px;
     font-size:12px;
-    display:flex;align-items:center;gap:8px;
+    color:var(--muted);
   }
-  .sidebar.collapsed .footer span{display:none}
 
-  /* Main */
+  /* MAIN */
   .content{
-    flex:1;display:flex;flex-direction:column;
-    background:#ffffff;border:1px solid #dbe3ff;border-radius:18px;
-    overflow:hidden;box-shadow:0 14px 40px rgba(15,23,42,.12);
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    overflow:hidden;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
-  .topbar{
-    height:62px;display:flex;align-items:center;justify-content:flex-end;
-    padding:0 14px;border-bottom:1px solid #e5e7eb;
-    background:#ffffff;gap:10px;
-  }
-  .iconBtn{
-    width:44px;height:44px;border-radius:14px;
-    border:1px solid #e5e7eb;background:#f8fafc;
-    display:flex;align-items:center;justify-content:center;
-    cursor:pointer;transition:.12s ease;
-  }
-  .iconBtn:hover{transform:translateY(-1px);background:#f1f5ff}
 
-  /* Cards */
+  /* CARDS (moved up already; tight spacing) */
   .cards{
-    display:flex;gap:12px;
-    padding:10px 12px 10px 12px;
-    border-bottom:1px solid #e5e7eb;
-    background:#ffffff;
+    display:flex;gap:10px;
+    padding:10px;
+    border-bottom:1px solid var(--border);
+    background:#fff;
     flex-wrap:wrap;
   }
   .card{
-    flex:0 0 260px;border-radius:16px;border:1px solid #e5e7eb;
-    background:#ffffff;
-    padding:12px 12px;
-    box-shadow:0 10px 26px rgba(15,23,42,.08);
+    flex:0 0 240px;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:#fff;
+    padding:10px 12px;
   }
-  .card .k{font-size:11px;color:#64748b;font-weight:900;letter-spacing:.8px}
-  .card .v{font-size:28px;font-weight:900;margin-top:6px}
+  .card .k{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.6px}
+  .card .v{font-size:22px;font-weight:700;margin-top:6px}
 
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
 
-  /* Message panel */
-  .pad{padding:14px}
+  /* MESSAGES PANEL */
+  .pad{padding:12px}
   .panel{
     max-width:1050px;
-    background:#ffffff;border:1px solid #e5e7eb;border-radius:18px;
+    border:1px solid var(--border);
+    border-radius:16px;
     padding:14px;
-    box-shadow:0 10px 26px rgba(15,23,42,.08);
+    background:#fff;
   }
-  .h1{font-weight:1000;font-size:18px}
-  .hint{font-size:12px;color:#64748b;line-height:1.4;margin-top:6px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
-  .lbl{font-size:12px;color:#64748b;font-weight:900;margin-bottom:6px}
+  .h1{font-weight:700;font-size:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .lbl{font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px}
+
   input,select,button{
-    width:100%;padding:12px;border-radius:14px;
-    border:1px solid #e5e7eb;background:#f8fafc;
-    color:#0f172a;outline:none;font-size:14px;
+    width:100%;
+    padding:11px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    color:#111827;
+    outline:none;
+    font-size:14px;
+    font-family:"Times New Roman", Times, serif;
   }
   button{
     cursor:pointer;
-    background:linear-gradient(135deg, #2563eb, #1d4ed8);
-    border-color:#1d4ed8;color:#fff;font-weight:1000;
-    transition:.12s ease;
+    background:linear-gradient(135deg, var(--orange), var(--orange2));
+    border-color:var(--orange2);
+    color:#fff;
+    font-weight:700;
   }
-  button:hover{transform:translateY(-1px)}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-  .chip{
-    padding:8px 10px;border-radius:999px;
-    border:1px solid #e5e7eb;background:#ffffff;
-    font-size:12px;font-weight:900;color:#334155;
-    display:inline-flex;align-items:center;gap:8px;
+
+  .statusLine{
+    margin-top:10px;
+    font-size:12px;
+    color:var(--muted);
+    font-weight:700;
   }
-  .dot{width:10px;height:10px;border-radius:99px;background:#94a3b8}
-  .dot.on{background:#22c55e}
-  .dot.off{background:#ef4444}
+  .ok{color:#16a34a}
+  .bad{color:#dc2626}
 
   @media (max-width: 980px){
-    .sidebar{width:240px;min-width:240px}
+    .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
     .grid{grid-template-columns:1fr}
   }
@@ -440,52 +448,43 @@ app.get("/dashboard", (req, res) => {
 <body>
 <div class="app">
 
-  <div class="sidebar" id="sidebar">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
     <div class="brand">
       <img id="arcLogo" src="/arcadis.png" alt="Arcadis"
         onerror="this.onerror=null; this.src='/image.png';"
       />
-      <div class="brandText">
+      <div>
         <div class="brandTitle">Display Health Monitor</div>
         <div class="brandSub">Arcadis Operations</div>
       </div>
     </div>
     <div class="divider"></div>
 
-    <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">
-      <div class="ico"><span>🗺️</span></div>
-      <div class="tabTxtWrap"><div class="tabTxt">MAP</div></div>
-    </div>
+    <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
+    <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
 
-    <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">
-      <div class="ico"><span>📟</span></div>
-      <div class="tabTxtWrap"><div class="tabTxt">MESSAGES</div></div>
-    </div>
-
-    <div class="footer">
-      <span>Powered by</span> <b>Arcadis</b>
-    </div>
+    <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
 
+  <!-- MAIN CONTENT -->
   <div class="content">
-    <div class="topbar">
-      <div class="iconBtn" title="Refresh" onclick="loadDevices(true)">🔄</div>
-      <div class="iconBtn" title="Sidebar toggle" onclick="toggleSidebar()">☰</div>
-    </div>
 
+    <!-- CARDS -->
     <div class="cards">
       <div class="card"><div class="k">TOTAL DEVICES</div><div class="v" id="total">0</div></div>
       <div class="card"><div class="k">ONLINE</div><div class="v" id="on">0</div></div>
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
     </div>
 
+    <!-- MAP VIEW -->
     <div class="view active" id="viewMap"><div id="map"></div></div>
 
+    <!-- MESSAGE VIEW -->
     <div class="view" id="viewMsg">
       <div class="pad">
         <div class="panel">
           <div class="h1">Cloud Message Control</div>
-          <div class="hint">Message sends only when you press <b>Send to ESP</b>.</div>
 
           <div class="grid">
             <div>
@@ -526,13 +525,10 @@ app.get("/dashboard", (req, res) => {
           </div>
 
           <div class="row">
-            <button onclick="sendToESP()">Send to ESP (Cloud)</button>
+            <button onclick="sendToESP()">Send to ESP</button>
           </div>
 
-          <div class="row" style="align-items:center;gap:12px">
-            <div class="chip"><span class="dot" id="dotConn"></span><span id="statusTxt">Status: Idle</span></div>
-            <div class="chip">Last update: <span id="lastUpd">-</span></div>
-          </div>
+          <div class="statusLine" id="statusTxt">Status: Idle</div>
         </div>
       </div>
     </div>
@@ -541,27 +537,15 @@ app.get("/dashboard", (req, res) => {
 </div>
 
 <script>
-  // Sidebar toggle (stores state)
-  function toggleSidebar(){
-    const sb = document.getElementById("sidebar");
-    sb.classList.toggle("collapsed");
-    localStorage.setItem("sbCollapsed", sb.classList.contains("collapsed") ? "1" : "0");
-    setTimeout(()=>map.invalidateSize(), 220);
-  }
-  (function(){
-    const v = localStorage.getItem("sbCollapsed");
-    if(v==="1") document.getElementById("sidebar").classList.add("collapsed");
-  })();
-
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
     document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
-    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
+    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
   }
 
-  // Map
+  // Map (Google tiles like you had)
   const map = L.map('map').setView([17.3850,78.4867], 12);
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
@@ -571,7 +555,7 @@ app.get("/dashboard", (req, res) => {
   const markers = new Map();
   function pinIcon(status){
     const isOn = (status === "online");
-    const fill = isOn ? "#22c55e" : "#ef4444";
+    const fill = isOn ? "#16a34a" : "#dc2626";
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
         <svg width="28" height="28" viewBox="0 0 64 64">
@@ -583,7 +567,7 @@ app.get("/dashboard", (req, res) => {
     return L.divIcon({ className:"", html, iconSize:[28,28], iconAnchor:[14,28] });
   }
 
-  // Templates
+  // Templates (for slot dropdown + auto-fill)
   const templates = ${JSON.stringify(defaultPacks())};
   const MSG_SLOTS = ${MSG_SLOTS};
   const SIGS = [
@@ -601,13 +585,9 @@ app.get("/dashboard", (req, res) => {
   const line2  = document.getElementById("line2");
   const forceSel = document.getElementById("forceSel");
   const statusTxt = document.getElementById("statusTxt");
-  const dotConn = document.getElementById("dotConn");
-  const lastUpd = document.getElementById("lastUpd");
 
   function setStatus(text, ok){
-    statusTxt.textContent = "Status: " + text;
-    dotConn.classList.remove("on","off");
-    dotConn.classList.add(ok ? "on" : "off");
+    statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
 
   function fillSigOptions(){
@@ -688,6 +668,7 @@ app.get("/dashboard", (req, res) => {
     }
   }
 
+  // SEND ONLY ON BUTTON CLICK ✅
   async function sendToESP(){
     const device_id = devSel.value;
     if(!device_id){ setStatus("No device selected", false); return; }
@@ -714,8 +695,7 @@ app.get("/dashboard", (req, res) => {
         setStatus("Failed: " + (out.error||"error"), false);
         return;
       }
-      lastUpd.textContent = new Date().toLocaleString();
-      setStatus("Sent ✅", true);
+      setStatus("Sent", true);
     }catch(e){
       setStatus("Network error", false);
     }
