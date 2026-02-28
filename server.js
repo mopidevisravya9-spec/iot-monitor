@@ -1,328 +1,12 @@
-const express = require("express");
-const cors = require("cors");
-const mongoose = require("mongoose");
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// ✅ Serve static files from /public
-// Put logo at: public/image.png
-app.use(express.static("public"));
-
 // ======================
-// DATABASE
-// ======================
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
-
-mongoose
-  .connect(MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch((err) => console.log("DB Error:", err));
-
-// ======================
-// MODELS
-// ======================
-const deviceSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
-  lat: { type: Number, default: 0 },
-  lng: { type: Number, default: 0 },
-  last_seen: { type: Number, default: 0 },
-  status: { type: String, default: "offline" },
-});
-
-const MSG_SLOTS = 5; // keep same as ESP (change to 10 if you also change ESP)
-
-function defaultMessages() {
-  // signals: red, amber, green, no
-  const base = (arr) => arr.map(([l1, l2]) => ({ l1, l2 }));
-  return {
-    red: base([
-      ["MINUTE OF PATIENCE A LIFETIME OF SAFETY", "HIT THE BRAKE, NOT REGRET"],
-      ["STOP NOW, LIVE MORE", "DON'T RUSH YOUR FUTURE"],
-      ["RED MEANS RULES", "RULES MEAN LIFE"],
-      ["STOP HERE, START LIVING", "ONE LIGHT, MANY LIVES"],
-      ["BRAKE FIRST", "REGRET NEVER"],
-    ]),
-    amber: base([
-      ["SPEED THRILLS BUT IT KILLS", "CALM YOUR ACCELERATOR"],
-      ["SLOW DOWN, STAY AROUND", "EASE UP BEFORE IT'S TOO LATE"],
-      ["WAIT SMART", "RISK IS NOT WORTH IT"],
-      ["HOLD ON", "SAFETY GOES FIRST"],
-      ["PAUSE THE SPEED", "SAVE A LIFE"],
-    ]),
-    green: base([
-      ["REACH HOME, NOT HEADLINES", "GO SMART, NOT FAST"],
-      ["GO, BUT DON'T GAMBLE", "STAY ALERT, STAY ALIVE"],
-      ["SAFE DRIVE = SAFE ARRIVAL", "KEEP DISTANCE, KEEP LIFE"],
-      ["GO WITH CARE", "NOT WITH RAGE"],
-      ["GREEN MEANS MOVE", "NOT RACE"],
-    ]),
-    no: base([
-      ["WEAR HELMET", "WEAR SEAT BELT"],
-      ["SIGNAL OFF - DRIVE SLOW", "FOLLOW RULES ALWAYS"],
-      ["STAY CALM", "DRIVE CAREFULLY"],
-      ["NO SIGNAL", "GIVE WAY"],
-      ["SLOW & SAFE", "IS THE RULE"],
-    ]),
-  };
-}
-
-const commandSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
-
-  // force: "red" | "amber" | "green" | ""
-  force: { type: String, default: "" },
-
-  // active slot per signal
-  active: {
-    red: { type: Number, default: 0 },
-    amber: { type: Number, default: 0 },
-    green: { type: Number, default: 0 },
-    no: { type: Number, default: 0 },
-  },
-
-  // messages per signal (slots)
-  messages: {
-    red: { type: Array, default: () => defaultMessages().red },
-    amber: { type: Array, default: () => defaultMessages().amber },
-    green: { type: Array, default: () => defaultMessages().green },
-    no: { type: Array, default: () => defaultMessages().no },
-  },
-
-  updated_at: { type: Number, default: 0 },
-});
-
-const Device = mongoose.model("Device", deviceSchema);
-const Command = mongoose.model("Command", commandSchema);
-
-// ======================
-// SIMPLE ADMIN AUTH
-// ======================
-// header: x-admin-user: admin
-// header: x-admin-pass: admin123
-function requireAdmin(req, res, next) {
-  const u = req.headers["x-admin-user"];
-  const p = req.headers["x-admin-pass"];
-  if (u === "admin" && p === "admin123") return next();
-  return res.status(401).json({ error: "Unauthorized" });
-}
-
-// ======================
-// HELPERS
-// ======================
-async function ensureCommandRow(device_id) {
-  return Command.findOneAndUpdate(
-    { device_id },
-    {
-      $setOnInsert: {
-        device_id,
-        force: "",
-        active: { red: 0, amber: 0, green: 0, no: 0 },
-        messages: defaultMessages(),
-        updated_at: 0,
-      },
-    },
-    { upsert: true, new: true }
-  );
-}
-
-function clampSlot(n) {
-  const x = Number.isFinite(n) ? n : 0;
-  if (x < 0) return 0;
-  if (x >= MSG_SLOTS) return MSG_SLOTS - 1;
-  return x;
-}
-
-function fixSlots(arr) {
-  // ensure exactly MSG_SLOTS items
-  const safe = Array.isArray(arr) ? arr : [];
-  const out = [];
-  for (let i = 0; i < MSG_SLOTS; i++) {
-    const it = safe[i] || {};
-    out.push({
-      l1: String(it.l1 || ""),
-      l2: String(it.l2 || ""),
-    });
-  }
-  return out;
-}
-
-// ======================
-// HOME
-// ======================
-app.get("/", (req, res) => res.send("Server Running"));
-
-// ======================
-// REGISTER
-// ======================
-app.post("/register", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const now = Date.now();
-    const doc = await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $setOnInsert: { device_id },
-        $set: {
-          lat: typeof lat === "number" ? lat : 0,
-          lng: typeof lng === "number" ? lng : 0,
-          last_seen: now,
-          status: "online",
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureCommandRow(device_id);
-    res.json({ message: "Registered", device: doc });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// HEARTBEAT
-// ======================
-app.post("/heartbeat", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const now = Date.now();
-
-    await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $set: {
-          last_seen: now,
-          status: "online",
-          ...(typeof lat === "number" ? { lat } : {}),
-          ...(typeof lng === "number" ? { lng } : {}),
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureCommandRow(device_id);
-
-    res.json({ message: "OK" });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// DEVICES (auto-offline FAST)
-// ======================
-app.get("/devices", async (req, res) => {
-  try {
-    const now = Date.now();
-    const OFFLINE_AFTER_MS = 5000; // 5 sec
-    await Device.updateMany(
-      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
-      { $set: { status: "offline" } }
-    );
-    const data = await Device.find().sort({ last_seen: -1 });
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// CONFIG API (for ESP + dashboard)
-// ESP reads: GET /api/config/:device_id   (no auth)
-// Dashboard writes: POST /api/config      (admin)
-// ======================
-
-// ESP reads full config
-app.get("/api/config/:device_id", async (req, res) => {
-  try {
-    const device_id = req.params.device_id;
-    const doc = await ensureCommandRow(device_id);
-    res.json({
-      device_id: doc.device_id,
-      force: doc.force || "",
-      active: doc.active || { red: 0, amber: 0, green: 0, no: 0 },
-      messages: doc.messages || defaultMessages(),
-      updated_at: doc.updated_at || 0,
-      slots: MSG_SLOTS,
-    });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// Dashboard updates: save slot OR apply OR force
-app.post("/api/config", requireAdmin, async (req, res) => {
-  try {
-    const { device_id, action } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const doc = await ensureCommandRow(device_id);
-    const now = Date.now();
-
-    const signals = ["red", "amber", "green", "no"];
-
-    if (action === "force") {
-      const force = String(req.body.force || "");
-      const ok = force === "" || signals.includes(force);
-      if (!ok) return res.status(400).json({ error: "invalid force" });
-
-      doc.force = force;
-      doc.updated_at = now;
-      await doc.save();
-      return res.json({ message: "Force updated", config: doc });
-    }
-
-    if (action === "save_slot") {
-      const sig = String(req.body.sig || "red");
-      const slot = clampSlot(Number(req.body.slot || 0));
-      if (!signals.includes(sig)) return res.status(400).json({ error: "invalid sig" });
-
-      const l1 = String(req.body.l1 || "");
-      const l2 = String(req.body.l2 || "");
-
-      const msgs = doc.messages || defaultMessages();
-      msgs[sig] = fixSlots(msgs[sig]);
-      msgs[sig][slot] = { l1, l2 };
-      doc.messages = msgs;
-      doc.updated_at = now;
-      await doc.save();
-      return res.json({ message: "Slot saved", config: doc });
-    }
-
-    if (action === "apply_slot") {
-      const sig = String(req.body.sig || "red");
-      const slot = clampSlot(Number(req.body.slot || 0));
-      if (!signals.includes(sig)) return res.status(400).json({ error: "invalid sig" });
-
-      const a = doc.active || { red: 0, amber: 0, green: 0, no: 0 };
-      a[sig] = slot;
-      doc.active = a;
-      doc.updated_at = now;
-      await doc.save();
-      return res.json({ message: "Slot applied", config: doc });
-    }
-
-    return res.status(400).json({ error: "Unknown action" });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// DASHBOARD PAGE (Map + Control + Display UI tab)
+// DASHBOARD (MAP + DISPLAY UI ONLY) - UPDATED THEME
 // ======================
 app.get("/dashboard", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
-<title>Arcadis - Junction Status</title>
+<title>Junction Operations Dashboard</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -330,99 +14,217 @@ app.get("/dashboard", (req, res) => {
 
 <style>
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:#f4f6f9}
+  html,body{height:100%;margin:0;font-family:Segoe UI,Arial;background:#0b1020;color:#e9eefc;overflow:hidden}
 
-  .app{height:100%;display:flex}
-  .sidebar{
-    width:240px;background:#ffffff;border-right:1px solid #e6e8ee;
-    display:flex;flex-direction:column;gap:8px;padding:12px;
+  /* background vibe */
+  .bg{
+    position:fixed;inset:0;
+    background:
+      radial-gradient(1200px 600px at 20% 10%, rgba(11,94,215,.35), transparent 60%),
+      radial-gradient(900px 500px at 85% 25%, rgba(45,187,78,.22), transparent 55%),
+      radial-gradient(700px 450px at 40% 95%, rgba(208,139,25,.18), transparent 55%),
+      linear-gradient(180deg, #070b16 0%, #0b1020 60%, #070b16 100%);
+    filter:saturate(1.1);
+    z-index:-2;
   }
-  .logoTop{display:flex;align-items:center;gap:10px;padding:6px 6px 12px 6px;border-bottom:1px solid #eef0f6}
-  .logoTop img{height:34px}
-  .logoTop .t1{font-weight:900;letter-spacing:.5px}
-  .logoTop .t2{font-size:12px;color:#6b7280;margin-top:2px}
+  .noise{
+    position:fixed;inset:0;z-index:-1;opacity:.06;pointer-events:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  }
+
+  /* layout */
+  .app{height:100%;display:flex;gap:12px;padding:12px}
+  .sidebar{
+    width:84px;
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:18px;
+    backdrop-filter: blur(10px);
+    display:flex;flex-direction:column;align-items:center;
+    padding:10px 8px;gap:10px;
+    box-shadow:0 18px 50px rgba(0,0,0,.35);
+  }
 
   .navbtn{
-    display:flex;align-items:center;gap:10px;
-    padding:10px 12px;border-radius:10px;cursor:pointer;user-select:none;
-    border:1px solid transparent;font-weight:700;color:#111827;
+    width:64px;height:64px;border-radius:16px;
+    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;
+    cursor:pointer;user-select:none;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.04);
+    transition:.18s ease;
   }
-  .navbtn.active{background:#eef6ff;border-color:#cfe5ff;color:#0b5ed7}
-  .navbtn:hover{background:#f6f7fb}
+  .navbtn:hover{transform:translateY(-1px);background:rgba(255,255,255,.07)}
+  .navbtn.active{
+    background:linear-gradient(135deg, rgba(11,94,215,.35), rgba(255,255,255,.06));
+    border-color: rgba(173,210,255,.35);
+    box-shadow:0 12px 30px rgba(11,94,215,.18);
+  }
+  .navico{font-size:20px}
+  .navtxt{font-size:10px;font-weight:900;opacity:.85;letter-spacing:.6px}
 
-  .content{flex:1;display:flex;flex-direction:column}
+  .content{
+    flex:1;display:flex;flex-direction:column;
+    background:rgba(255,255,255,.05);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:18px;
+    backdrop-filter: blur(10px);
+    overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,.35);
+  }
+
   .topbar{
-    height:58px;background:#ffffff;border-bottom:1px solid #e6e8ee;
-    display:flex;align-items:center;justify-content:space-between;padding:0 14px;
+    height:62px;
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 14px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
   }
-  .title{font-weight:900}
-  .logout{padding:8px 12px;border-radius:10px;border:1px solid #e6e8ee;background:#fff;cursor:pointer;font-weight:800}
+  .topLeft{
+    display:flex;align-items:center;gap:10px;
+    font-weight:1000;letter-spacing:.4px;
+  }
+  .pill{
+    padding:8px 10px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.05);
+    font-size:12px;font-weight:900;opacity:.9;
+  }
+  .logoutIcon{
+    width:40px;height:40px;border-radius:14px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.06);
+    display:flex;align-items:center;justify-content:center;
+    cursor:pointer;transition:.18s ease;
+  }
+  .logoutIcon:hover{transform:translateY(-1px);background:rgba(255,255,255,.09)}
+  .logoutIcon svg{opacity:.9}
 
-  .cards{display:flex;gap:12px;padding:12px;background:#ffffff;border-bottom:1px solid #e6e8ee;flex-wrap:wrap}
-  .card{flex:0 0 210px;background:#f8fafc;border:1px solid #e6e8ee;border-radius:12px;padding:10px 12px}
-  .card .k{font-size:12px;color:#6b7280;font-weight:800}
-  .card .v{font-size:26px;font-weight:900;margin-top:4px}
-
-  #map{flex:1}
+  .cards{
+    display:flex;gap:12px;padding:12px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+    flex-wrap:wrap;
+    background:rgba(255,255,255,.03);
+  }
+  .card{
+    flex:0 0 220px;
+    border-radius:16px;
+    border:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+    padding:12px 12px;
+    box-shadow:0 14px 34px rgba(0,0,0,.25);
+    position:relative;
+    overflow:hidden;
+  }
+  .card:before{
+    content:"";
+    position:absolute;inset:-2px;
+    background:radial-gradient(300px 100px at 20% 0%, rgba(255,255,255,.15), transparent 60%);
+    opacity:.7;
+  }
+  .card .k{font-size:11px;opacity:.75;font-weight:900;letter-spacing:.8px;position:relative}
+  .card .v{font-size:28px;font-weight:1000;margin-top:6px;position:relative}
 
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
 
-  .ctlwrap{padding:14px;max-width:980px}
-  .panel{background:#ffffff;border:1px solid #e6e8ee;border-radius:14px;padding:14px}
+  #map{flex:1}
+
+  /* Display UI panel */
+  .ctlwrap{padding:14px;max-width:1020px}
+  .panel{
+    background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:18px;
+    padding:14px;
+    box-shadow:0 18px 50px rgba(0,0,0,.30);
+  }
+  .hint{font-size:12px;opacity:.75;line-height:1.35}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
-  .grid1{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+
   input,select,button{
-    width:100%;padding:12px;border-radius:12px;border:1px solid #e6e8ee;outline:none;font-size:14px;
+    width:100%;
+    padding:12px;border-radius:14px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(10,14,28,.55);
+    color:#e9eefc;
+    outline:none;
+    font-size:14px;
   }
-  button{background:#0b5ed7;color:#fff;border-color:#0b5ed7;font-weight:900;cursor:pointer}
-  .hint{font-size:12px;color:#6b7280}
-  .mini{font-size:12px;color:#111827;font-weight:800}
-  .row{display:flex;gap:10px;flex-wrap:wrap}
-  .btnSmall{width:auto;padding:10px 12px;border-radius:12px;border:1px solid #e6e8ee;background:#fff;color:#111827;cursor:pointer;font-weight:900}
-  .btnRed{background:#d94141;border-color:#d94141;color:#fff}
-  .btnAmb{background:#d08b19;border-color:#d08b19;color:#fff}
-  .btnGrn{background:#2dbb4e;border-color:#2dbb4e;color:#fff}
-  .btnGry{background:#111827;border-color:#111827;color:#fff}
-
-  .watermark{
-    position:fixed;left:10px;bottom:10px;background:rgba(255,255,255,.9);
-    border:1px solid #e6e8ee;border-radius:12px;padding:8px 10px;display:flex;align-items:center;gap:10px;
-    box-shadow:0 10px 20px rgba(0,0,0,.08);z-index:9999;
+  button{
+    cursor:pointer;
+    background:linear-gradient(135deg, rgba(11,94,215,.95), rgba(11,94,215,.65));
+    border-color: rgba(173,210,255,.35);
+    font-weight:1000;
+    transition:.15s ease;
   }
-  .watermark img{height:26px}
-  .watermark .p{font-size:12px;font-weight:900;color:#111827}
-  .watermark .s{font-size:11px;color:#6b7280;margin-top:1px}
+  button:hover{transform:translateY(-1px)}
+  .btnSmall{
+    width:auto;padding:10px 12px;border-radius:14px;
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);
+    font-weight:1000;
+  }
+  .btnRed{background:linear-gradient(135deg, rgba(217,65,65,.95), rgba(217,65,65,.65));border-color:rgba(255,190,190,.35)}
+  .btnAmb{background:linear-gradient(135deg, rgba(208,139,25,.95), rgba(208,139,25,.65));border-color:rgba(255,230,190,.35)}
+  .btnGrn{background:linear-gradient(135deg, rgba(45,187,78,.95), rgba(45,187,78,.65));border-color:rgba(190,255,210,.35)}
+  .btnGry{background:linear-gradient(135deg, rgba(17,24,39,.95), rgba(17,24,39,.65));border-color:rgba(255,255,255,.18)}
 
+  /* Login */
   .loginOverlay{
-    position:fixed;inset:0;background:linear-gradient(135deg,#0b5ed7,#061a3a);
-    display:flex;align-items:center;justify-content:center;z-index:10000;
+    position:fixed;inset:0;
+    background:linear-gradient(135deg,#0b5ed7,#061a3a);
+    display:flex;align-items:center;justify-content:center;
+    z-index:10000;
   }
   .loginCard{
-    width:min(420px,92vw);background:rgba(255,255,255,.96);
-    border-radius:18px;border:1px solid rgba(255,255,255,.5);
-    padding:18px;box-shadow:0 30px 60px rgba(0,0,0,.35);animation:pop .35s ease;
+    width:min(420px,92vw);
+    background:rgba(255,255,255,.96);
+    border-radius:18px;
+    border:1px solid rgba(255,255,255,.5);
+    padding:18px;
+    box-shadow:0 30px 60px rgba(0,0,0,.35);
+    animation:pop .35s ease;
   }
   @keyframes pop{from{transform:scale(.96);opacity:.5}to{transform:scale(1);opacity:1}}
   .loginTop{display:flex;align-items:center;gap:12px}
   .loginTop img{height:34px}
   .loginTop .h{font-size:18px;font-weight:1000}
-  .err{color:#b91c1c;font-size:12px;font-weight:800;margin-top:8px;display:none}
+  .err{color:#b91c1c;font-size:12px;font-weight:900;margin-top:8px;display:none}
 
-  .ok{color:#2dbb4e;font-weight:900}
-  .bad{color:#d94141;font-weight:900}
+  /* Single logo only (watermark) */
+  .watermark{
+    position:fixed;left:12px;bottom:12px;
+    background:rgba(255,255,255,.90);
+    border:1px solid #e6e8ee;border-radius:14px;
+    padding:8px 10px;display:flex;align-items:center;gap:10px;
+    box-shadow:0 10px 20px rgba(0,0,0,.18);
+    z-index:9999;
+  }
+  .watermark img{height:26px}
+  .watermark .p{font-size:12px;font-weight:1000;color:#111827}
+  .watermark .s{font-size:11px;color:#6b7280;margin-top:1px}
+
+  @media (max-width: 920px){
+    .cards{gap:10px}
+    .card{flex:1 1 160px}
+    .grid{grid-template-columns:1fr}
+  }
 </style>
 </head>
 
 <body>
+<div class="bg"></div>
+<div class="noise"></div>
 
+<!-- LOGIN -->
 <div class="loginOverlay" id="loginOverlay">
   <div class="loginCard">
     <div class="loginTop">
       <img src="/image.png" onerror="this.style.display='none'"/>
       <div>
-        <div class="h">Arcadis Junction Dashboard</div>
-        <div class="hint">Login required</div>
+        <div class="h">Operations Console</div>
+        <div class="hint">Access control enabled</div>
       </div>
     </div>
     <div style="margin-top:12px">
@@ -442,31 +244,41 @@ app.get("/dashboard", (req, res) => {
 
 <div class="app">
 
+  <!-- SIDEBAR (NO TOP LOGO / NO NAMES) -->
   <div class="sidebar">
-    <div class="logoTop">
-      <img src="/image.png" onerror="this.style.display='none'"/>
-      <div>
-        <div class="t1">ARCADIS</div>
-        <div class="t2">Junction status & control</div>
+    <div class="navbtn active" id="navMap" onclick="showTab('map')">
+      <div class="navico">🗺️</div>
+      <div class="navtxt">MAP</div>
+    </div>
+    <div class="navbtn" id="navEsp" onclick="showTab('esp')">
+      <div class="navico">🖥️</div>
+      <div class="navtxt">DISPLAY</div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="content">
+    <div class="topbar">
+      <div class="topLeft">
+        <div class="pill">Junction Operations</div>
+        <div class="pill" id="liveTag">Live</div>
+      </div>
+
+      <!-- logout icon -->
+      <div class="logoutIcon" title="Logout" onclick="logout()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M10 7V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-1" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <path d="M15 12H3m0 0 3-3m-3 3 3 3" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
       </div>
     </div>
 
-    <div class="navbtn active" id="navMap" onclick="showTab('map')">🗺️ Map</div>
-    <div class="navbtn" id="navCtl" onclick="showTab('ctl')">🕹️ Control</div>
-    <div class="navbtn" id="navEsp" onclick="showTab('esp')">🖥️ Display UI</div>
-  </div>
-
-  <div class="content">
-    <div class="topbar">
-      <div class="title">Live Junction Status</div>
-      <button class="logout" onclick="logout()">Logout</button>
-    </div>
-
+    <!-- KPI cards (NO refresh card) -->
     <div class="cards">
       <div class="card"><div class="k">TOTAL DEVICES</div><div class="v" id="total">0</div></div>
       <div class="card"><div class="k">ONLINE</div><div class="v" id="on">0</div></div>
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
-      <div class="card"><div class="k">REFRESH</div><div class="v" style="font-size:18px;margin-top:10px">1 second</div></div>
+      <div class="card"><div class="k">HEARTBEAT HEALTH</div><div class="v" id="hb">-</div></div>
     </div>
 
     <!-- MAP -->
@@ -474,56 +286,13 @@ app.get("/dashboard", (req, res) => {
       <div id="map"></div>
     </div>
 
-    <!-- CONTROL (basic) -->
-    <div class="view" id="viewCtl">
-      <div class="ctlwrap">
-        <div class="panel">
-          <div style="font-weight:1000;font-size:16px">Remote Control (Cloud)</div>
-          <div class="hint" style="margin-top:6px">
-            Browser → Server → ESP fetches config → Display updates.
-          </div>
-
-          <div class="grid">
-            <div>
-              <div class="hint">Device</div>
-              <select id="deviceSelect"></select>
-            </div>
-            <div>
-              <div class="hint">Force Signal (optional)</div>
-              <select id="basicForce">
-                <option value="">No Force</option>
-                <option value="red">Force RED</option>
-                <option value="amber">Force AMBER</option>
-                <option value="green">Force GREEN</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="grid">
-            <div>
-              <div class="hint">Command status</div>
-              <input id="statusBox" readonly value="Idle"/>
-            </div>
-            <div>
-              <div class="hint">Apply Force</div>
-              <button onclick="sendForceBasic()">Send Force</button>
-            </div>
-          </div>
-
-          <div class="hint" style="margin-top:10px">
-            For full “ESP-style” message slots UI, open <b>Display UI</b> tab.
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- DISPLAY UI (ESP browser same workflow) -->
+    <!-- DISPLAY UI -->
     <div class="view" id="viewEsp">
       <div class="ctlwrap">
         <div class="panel">
-          <div style="font-weight:1000;font-size:16px">Display UI (Same as ESP Web)</div>
+          <div style="font-weight:1000;font-size:16px">Display Configuration</div>
           <div class="hint" style="margin-top:6px">
-            Signal → Message Slot → Edit lines → Save → Apply ACTIVE. Plus Force buttons.
+            Signal → Message Slot → Save → Apply ACTIVE. Force is optional and overrides signals.
           </div>
 
           <div class="grid">
@@ -532,8 +301,8 @@ app.get("/dashboard", (req, res) => {
               <select id="espDevice" onchange="loadConfigToUI()"></select>
             </div>
             <div>
-              <div class="hint">Cloud Status</div>
-              <input id="espCloud" readonly value="-" />
+              <div class="hint">Action Status</div>
+              <input id="espStatus" readonly value="Idle"/>
             </div>
           </div>
 
@@ -548,7 +317,7 @@ app.get("/dashboard", (req, res) => {
               </select>
             </div>
             <div>
-              <div class="hint">Select Message</div>
+              <div class="hint">Select Message Slot</div>
               <select id="slotSel" onchange="loadSlotLines()"></select>
             </div>
           </div>
@@ -556,11 +325,11 @@ app.get("/dashboard", (req, res) => {
           <div class="grid">
             <div>
               <div class="hint">Message Line 1</div>
-              <input id="line1" placeholder="Enter message line 1" />
+              <input id="line1" placeholder="Enter message line 1"/>
             </div>
             <div>
               <div class="hint">Message Line 2</div>
-              <input id="line2" placeholder="Enter message line 2" />
+              <input id="line2" placeholder="Enter message line 2"/>
             </div>
           </div>
 
@@ -575,8 +344,8 @@ app.get("/dashboard", (req, res) => {
             </div>
           </div>
 
-          <div style="margin-top:12px" class="mini">Force Signal</div>
-          <div class="row" style="margin-top:8px">
+          <div style="margin-top:12px;font-weight:1000">Force Signal</div>
+          <div class="row">
             <button class="btnSmall btnRed" onclick="forceNow('red')">RED</button>
             <button class="btnSmall btnAmb" onclick="forceNow('amber')">AMBER</button>
             <button class="btnSmall btnGrn" onclick="forceNow('green')">GREEN</button>
@@ -585,18 +354,15 @@ app.get("/dashboard", (req, res) => {
 
           <div class="grid" style="margin-top:12px">
             <div>
-              <div class="hint">Active Slot (this signal)</div>
-              <input id="activeInfo" readonly value="-" />
+              <div class="hint">Active Slot (Selected Signal)</div>
+              <input id="activeInfo" readonly value="-"/>
             </div>
             <div>
-              <div class="hint">Action Status</div>
-              <input id="espStatus" readonly value="Idle" />
+              <div class="hint">Config Version (updated_at)</div>
+              <input id="verInfo" readonly value="-"/>
             </div>
           </div>
 
-          <div class="hint" style="margin-top:10px">
-            Note: This tab edits the same data the ESP will fetch from <b>/api/config/:device_id</b>.
-          </div>
         </div>
       </div>
     </div>
@@ -604,11 +370,12 @@ app.get("/dashboard", (req, res) => {
   </div>
 </div>
 
+<!-- SINGLE LOGO ONLY -->
 <div class="watermark">
   <img src="/image.png" onerror="this.style.display='none'"/>
   <div>
     <div class="p">Powered by Arcadis</div>
-    <div class="s">Live monitoring</div>
+    <div class="s">Operations monitoring</div>
   </div>
 </div>
 
@@ -639,6 +406,7 @@ app.get("/dashboard", (req, res) => {
       loadDevices();
     }
   })();
+
   function authHeaders(){
     return {
       "x-admin-user": localStorage.getItem("arcadis_auth_user") || "",
@@ -649,19 +417,17 @@ app.get("/dashboard", (req, res) => {
   // ===== TABS =====
   function showTab(which){
     document.getElementById("navMap").classList.toggle("active", which==="map");
-    document.getElementById("navCtl").classList.toggle("active", which==="ctl");
     document.getElementById("navEsp").classList.toggle("active", which==="esp");
-
     document.getElementById("viewMap").classList.toggle("active", which==="map");
-    document.getElementById("viewCtl").classList.toggle("active", which==="ctl");
     document.getElementById("viewEsp").classList.toggle("active", which==="esp");
-
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 200); }
     if(which==="esp"){ setTimeout(loadConfigToUI, 0); }
   }
 
   // ===== MAP =====
   const map = L.map('map').setView([17.3850,78.4867], 12);
+
+  // Google tiles
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
     maxZoom: 20
@@ -672,7 +438,7 @@ app.get("/dashboard", (req, res) => {
   function pinIcon(status){
     const isOn = (status === "online");
     const fill = isOn ? "#2dbb4e" : "#d94141";
-    const shadow = "rgba(0,0,0,.25)";
+    const shadow = "rgba(0,0,0,.28)";
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
         <svg width="28" height="28" viewBox="0 0 64 64">
@@ -684,30 +450,30 @@ app.get("/dashboard", (req, res) => {
     return L.divIcon({ className:"", html, iconSize:[28,28], iconAnchor:[14,28] });
   }
 
-  // dropdowns share same device list
+  // ===== DEVICES + KPIs =====
   async function loadDevices(){
     try{
       const res = await fetch('/devices');
       const data = await res.json();
 
-      const sel1 = document.getElementById("deviceSelect");
+      // dropdown (display UI)
       const sel2 = document.getElementById("espDevice");
-      const cur1 = sel1.value, cur2 = sel2.value;
-
-      sel1.innerHTML = ""; sel2.innerHTML = "";
+      const cur2 = sel2.value;
+      sel2.innerHTML = "";
       (data||[]).forEach(d=>{
-        const label = d.device_id + " (" + d.status + ")";
-        const o1 = document.createElement("option"); o1.value=d.device_id; o1.textContent=label; sel1.appendChild(o1);
-        const o2 = document.createElement("option"); o2.value=d.device_id; o2.textContent=label; sel2.appendChild(o2);
+        const opt = document.createElement("option");
+        opt.value = d.device_id;
+        opt.textContent = d.device_id + " (" + d.status + ")";
+        sel2.appendChild(opt);
       });
-
-      if(cur1) sel1.value = cur1;
       if(cur2) sel2.value = cur2;
 
       let on=0, off=0;
+      let lastSeenMax = 0;
       (data||[]).forEach(d=>{
         const isOn = (d.status==="online");
         if(isOn) on++; else off++;
+        lastSeenMax = Math.max(lastSeenMax, d.last_seen||0);
 
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
@@ -728,46 +494,36 @@ app.get("/dashboard", (req, res) => {
       document.getElementById("on").innerText = on;
       document.getElementById("off").innerText = off;
 
+      // Heartbeat health KPI = seconds since last seen (best-effort)
+      const secAgo = lastSeenMax ? Math.floor((Date.now()-lastSeenMax)/1000) : "-";
+      document.getElementById("hb").innerText = (secAgo==="-"? "-" : (secAgo + "s"));
+
+      // Live tag pulse based on any online devices
+      const liveTag = document.getElementById("liveTag");
+      liveTag.textContent = on>0 ? "Live" : "Degraded";
+      liveTag.style.borderColor = on>0 ? "rgba(190,255,210,.35)" : "rgba(255,190,190,.35)";
+      liveTag.style.background = on>0 ? "rgba(45,187,78,.12)" : "rgba(217,65,65,.12)";
     }catch(e){
       console.log(e);
     }
   }
+
   setInterval(loadDevices, 1000);
 
-  // ===== BASIC FORCE (Control tab) =====
-  async function sendForceBasic(){
-    const device_id = document.getElementById("deviceSelect").value;
-    const force = document.getElementById("basicForce").value;
-    const statusBox = document.getElementById("statusBox");
-    statusBox.value = "Sending...";
-    try{
-      const res = await fetch("/api/config", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json", ...authHeaders() },
-        body: JSON.stringify({ device_id, action:"force", force })
-      });
-      const out = await res.json();
-      statusBox.value = res.ok ? "Sent ✅" : ("Failed ❌ " + (out.error||""));
-    }catch(e){
-      statusBox.value = "Error ❌";
-    }
-  }
-
-  // ===== DISPLAY UI TAB =====
+  // ===== DISPLAY UI TAB (cloud config) =====
   let cachedConfig = null;
 
   async function loadConfigToUI(){
     const device_id = document.getElementById("espDevice").value;
     if(!device_id) return;
+
     document.getElementById("espStatus").value = "Loading...";
     try{
       const res = await fetch("/api/config/" + encodeURIComponent(device_id));
       const cfg = await res.json();
       cachedConfig = cfg;
 
-      document.getElementById("espCloud").value =
-        (cfg && cfg.updated_at>=0) ? ("Config OK | slots=" + (cfg.slots||"-")) : "-";
-
+      document.getElementById("verInfo").value = String(cfg.updated_at || 0);
       refreshSlotDropdown(false);
       document.getElementById("espStatus").value = "Ready ✅";
     }catch(e){
@@ -830,6 +586,7 @@ app.get("/dashboard", (req, res) => {
       const out = await res.json();
       if(res.ok){
         cachedConfig = out.config;
+        document.getElementById("verInfo").value = String(out.config.updated_at || 0);
         document.getElementById("espStatus").value = "Saved ✅";
         refreshSlotDropdown(false);
       }else{
@@ -855,6 +612,7 @@ app.get("/dashboard", (req, res) => {
       const out = await res.json();
       if(res.ok){
         cachedConfig = out.config;
+        document.getElementById("verInfo").value = String(out.config.updated_at || 0);
         document.getElementById("espStatus").value = "Applied ✅";
         refreshSlotDropdown(false);
       }else{
@@ -877,7 +635,8 @@ app.get("/dashboard", (req, res) => {
       const out = await res.json();
       if(res.ok){
         cachedConfig = out.config;
-        document.getElementById("espStatus").value = (force?("Forced " + force.toUpperCase() + " ✅"):"AUTO ✅");
+        document.getElementById("verInfo").value = String(out.config.updated_at || 0);
+        document.getElementById("espStatus").value = force ? ("Forced " + force.toUpperCase() + " ✅") : "AUTO ✅";
         refreshSlotDropdown(false);
       }else{
         document.getElementById("espStatus").value = "Failed ❌ " + (out.error||"");
@@ -887,11 +646,9 @@ app.get("/dashboard", (req, res) => {
     }
   }
 </script>
-
 </body>
 </html>`);
 });
-
 // ======================
 // START
 // ======================
