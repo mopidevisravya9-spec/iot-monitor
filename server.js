@@ -1,13 +1,78 @@
-// server.js ✅ FULL (LIGHT ORANGE+WHITE + TIMES NEW ROMAN + NO TOP ICONS + NO TAB ICONS + POWERED BY ARCADIS + LOGO FALLBACKS)
+// server.js ✅ FULL (LOGIN admin / Ibi@123 + ORANGE/WHITE 3D + ANIMATIONS)
+// Put Arcadis logo in: public/arcadis.png  (fallbacks: public/image.png, public/logo.png)
 
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
+
+// ======================
+// SIMPLE LOGIN CONFIG
+// ======================
+const LOGIN_USER = "admin";
+const LOGIN_PASS = "Ibi@123"; // as you requested
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+// token -> { expiresAt }
+const sessions = new Map();
+
+function newToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function getCookie(req, name) {
+  const c = req.headers.cookie || "";
+  const parts = c.split(";").map((x) => x.trim());
+  for (const p of parts) {
+    const eq = p.indexOf("=");
+    if (eq > 0) {
+      const k = p.slice(0, eq);
+      const v = p.slice(eq + 1);
+      if (k === name) return decodeURIComponent(v);
+    }
+  }
+  return "";
+}
+
+function setCookie(res, name, value, opts = {}) {
+  const { maxAgeMs = SESSION_TTL_MS, httpOnly = true, sameSite = "Lax", path = "/", secure = false } = opts;
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    `Path=${path}`,
+    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
+    `SameSite=${sameSite}`,
+  ];
+  if (httpOnly) parts.push("HttpOnly");
+  if (secure) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearCookie(res, name) {
+  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax`);
+}
+
+function isAuthed(req) {
+  const t = getCookie(req, "dhm_token");
+  if (!t) return false;
+  const s = sessions.get(t);
+  if (!s) return false;
+  if (Date.now() > s.expiresAt) {
+    sessions.delete(t);
+    return false;
+  }
+  return true;
+}
+
+function requireAuth(req, res, next) {
+  if (isAuthed(req)) return next();
+  // If user opens /dashboard directly, send to /login
+  return res.redirect("/login");
+}
 
 // ======================
 // DATABASE
@@ -71,27 +136,21 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-
   force: { type: String, default: "" }, // "" | red | amber | green
-
-  // active slot per signal group (this is what ESP uses)
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
     green: { type: Number, default: 0 },
     no: { type: Number, default: 0 },
   },
-
-  // message packs per signal group
   packs: {
     red: { type: Array, default: () => defaultPacks().red },
     amber: { type: Array, default: () => defaultPacks().amber },
     green: { type: Array, default: () => defaultPacks().green },
     no: { type: Array, default: () => defaultPacks().no },
   },
-
-  v: { type: Number, default: 0 },         // version
-  updated_at: { type: Number, default: 0 }, // timestamp
+  v: { type: Number, default: 0 },
+  updated_at: { type: Number, default: 0 },
 });
 
 const Device = mongoose.model("Device", deviceSchema);
@@ -142,156 +201,307 @@ async function ensureMsgRow(device_id) {
 app.get("/", (req, res) => res.send("Server Running ✅"));
 
 // ======================
-// DEVICE REGISTER + HEARTBEAT
+// AUTH PAGES + API
 // ======================
-app.post("/register", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
+app.get("/login", (req, res) => {
+  // If already authed, go dashboard
+  if (isAuthed(req)) return res.redirect("/dashboard");
 
-    const now = Date.now();
-
-    const doc = await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $setOnInsert: { device_id },
-        $set: {
-          lat: typeof lat === "number" ? lat : 0,
-          lng: typeof lng === "number" ? lng : 0,
-          last_seen: now,
-          status: "online",
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureMsgRow(device_id);
-    res.json({ message: "Registered", device: doc });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+  res.send(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Login - Display Health Monitor</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;overflow:hidden;color:#111827}
+  :root{
+    --orange:#f97316;
+    --orange2:#fb923c;
+    --bg:#fff7ed;
+    --card:#ffffff;
+    --border:#fed7aa;
+    --muted:#6b7280;
   }
-});
-
-app.post("/heartbeat", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const now = Date.now();
-
-    await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $set: {
-          last_seen: now,
-          status: "online",
-          ...(typeof lat === "number" ? { lat } : {}),
-          ...(typeof lng === "number" ? { lng } : {}),
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureMsgRow(device_id);
-    res.json({ message: "OK" });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+  .wrap{
+    height:100%;display:flex;align-items:center;justify-content:center;
+    padding:18px;
+    background:
+      radial-gradient(900px 500px at 20% 20%, rgba(249,115,22,.20), transparent 60%),
+      radial-gradient(700px 500px at 80% 30%, rgba(251,146,60,.18), transparent 55%),
+      linear-gradient(180deg, #fff7ed, #ffffff);
   }
-});
 
-// ======================
-// DEVICES LIST
-// ======================
-app.get("/devices", async (req, res) => {
-  try {
-    const now = Date.now();
-    await Device.updateMany(
-      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
-      { $set: { status: "offline" } }
-    );
-
-    const data = await Device.find().sort({ last_seen: -1 });
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+  .card{
+    width:min(980px, 96vw);
+    min-height:520px;
+    border-radius:22px;
+    border:1px solid var(--border);
+    background:rgba(255,255,255,.82);
+    backdrop-filter: blur(10px);
+    box-shadow:
+      0 28px 60px rgba(17,24,39,.18),
+      0 12px 26px rgba(249,115,22,.10);
+    display:grid;
+    grid-template-columns: 1.1fr .9fr;
+    overflow:hidden;
+    transform: translateZ(0);
+    animation: pop .55s ease both;
   }
-});
 
-// ======================
-// CLOUD MESSAGE API
-// ======================
-// POST /api/simple  {device_id, force, sig, slot, line1, line2}
-app.post("/api/simple", async (req, res) => {
-  try {
-    const { device_id, force, sig, slot, line1, line2 } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
+  @keyframes pop{
+    from{opacity:0; transform: translateY(16px) scale(.98)}
+    to{opacity:1; transform: translateY(0) scale(1)}
+  }
 
-    const doc = await ensureMsgRow(device_id);
-    const now = Date.now();
+  .left{
+    padding:28px;
+    position:relative;
+    background:
+      linear-gradient(135deg, rgba(249,115,22,.20), rgba(251,146,60,.08)),
+      linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.75));
+  }
 
-    const f = String(force || "");
-    if (!(f === "" || f === "red" || f === "amber" || f === "green")) {
-      return res.status(400).json({ error: "invalid force" });
+  .logoRow{display:flex;align-items:center;gap:12px}
+  .logo{
+    width:58px;height:58px;border-radius:16px;
+    background:#fff;border:1px solid var(--border);
+    object-fit:contain;padding:8px;
+    box-shadow: 0 12px 22px rgba(249,115,22,.15);
+  }
+
+  .title{font-size:24px;font-weight:800;letter-spacing:.3px;margin:10px 0 6px}
+  .sub{font-size:13px;color:var(--muted);font-weight:700;line-height:1.5}
+
+  .floaty{
+    position:absolute;inset:auto 24px 24px 24px;
+    border-radius:18px;
+    border:1px solid var(--border);
+    background:rgba(255,255,255,.85);
+    padding:14px;
+    box-shadow: 0 18px 40px rgba(17,24,39,.10);
+    transform: perspective(900px) rotateX(3deg);
+    animation: breathe 3.2s ease-in-out infinite;
+  }
+  @keyframes breathe{
+    0%,100%{transform: perspective(900px) rotateX(3deg) translateY(0)}
+    50%{transform: perspective(900px) rotateX(3deg) translateY(-6px)}
+  }
+
+  .kpi{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+  .pill{
+    padding:8px 10px;border-radius:999px;
+    border:1px solid var(--border);background:#fff;
+    font-size:12px;font-weight:800;color:#334155;
+    box-shadow: 0 10px 18px rgba(249,115,22,.10);
+  }
+
+  .right{
+    padding:28px;
+    display:flex;align-items:center;justify-content:center;
+    background: linear-gradient(180deg, rgba(255,255,255,.95), rgba(255,255,255,.80));
+  }
+
+  form{
+    width:100%;
+    max-width:340px;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
+  .h{font-size:18px;font-weight:800;margin-bottom:6px}
+  label{font-size:12px;font-weight:800;color:var(--muted)}
+  input{
+    width:100%;
+    padding:12px 12px;
+    border-radius:14px;
+    border:1px solid var(--border);
+    outline:none;
+    font-size:14px;
+    font-family:"Times New Roman", Times, serif;
+    background:#fff;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+    transition: .15s ease;
+  }
+  input:focus{
+    border-color: rgba(249,115,22,.65);
+    box-shadow:
+      0 0 0 5px rgba(249,115,22,.18),
+      inset 0 1px 0 rgba(255,255,255,.9);
+    transform: translateY(-1px);
+  }
+
+  button{
+    padding:12px;
+    border-radius:14px;
+    border:1px solid rgba(251,146,60,.9);
+    cursor:pointer;
+    font-weight:900;
+    letter-spacing:.3px;
+    color:white;
+    background: linear-gradient(135deg, var(--orange), var(--orange2));
+    box-shadow: 0 18px 32px rgba(249,115,22,.26);
+    transition: .12s ease;
+  }
+  button:hover{transform: translateY(-1px)}
+  button:active{transform: translateY(0)}
+  .err{
+    display:none;
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(220,38,38,.25);
+    background: rgba(220,38,38,.06);
+    color:#b91c1c;
+    font-weight:800;
+    font-size:12px;
+  }
+  .foot{
+    margin-top:10px;
+    font-size:12px;
+    color:var(--muted);
+    font-weight:800;
+    text-align:center;
+  }
+
+  @media (max-width: 860px){
+    .card{grid-template-columns: 1fr}
+    .left{display:none}
+    .right{padding:24px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="left">
+      <div class="logoRow">
+        <img class="logo" id="arcLogo" src="/arcadis.png" alt="Arcadis"
+          onerror="this.onerror=null; this.src='/image.png';"
+        />
+        <div>
+          <div class="title">Display Health Monitor</div>
+          <div class="sub">Operations Console • Secure Access</div>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="pill">Live device status</div>
+        <div class="pill">Map markers</div>
+        <div class="pill">Cloud messaging</div>
+        <div class="pill">Force signal control</div>
+      </div>
+
+      <div class="floaty">
+        <div style="font-weight:900;margin-bottom:6px">Powered by Arcadis</div>
+        <div style="font-size:12px;color:var(--muted);font-weight:800;line-height:1.45">
+          Login to access monitoring and messaging. This portal is intended for authorized operators only.
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <form id="loginForm" autocomplete="off">
+        <div class="h">Login</div>
+
+        <div>
+          <label>Username</label>
+          <input id="u" placeholder="admin" />
+        </div>
+
+        <div>
+          <label>Password</label>
+          <input id="p" type="password" placeholder="••••••••" />
+        </div>
+
+        <div class="err" id="errBox">Invalid credentials</div>
+
+        <button type="submit">Sign In</button>
+
+        <div class="foot">Orange + White Theme • Arcadis</div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  const form = document.getElementById("loginForm");
+  const err  = document.getElementById("errBox");
+  const u = document.getElementById("u");
+  const p = document.getElementById("p");
+
+  // Logo fallback chain
+  const img = document.getElementById("arcLogo");
+  img.addEventListener("error", ()=>{
+    if(img.src.endsWith("/arcadis.png")) img.src="/image.png";
+    else if(img.src.endsWith("/image.png")) img.src="/logo.png";
+  });
+
+  form.addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    err.style.display = "none";
+
+    const payload = { username: u.value || "", password: p.value || "" };
+
+    try{
+      const r = await fetch("/auth/login", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+
+      const out = await r.json().catch(()=> ({}));
+      if(!r.ok || !out.ok){
+        err.textContent = out.error || "Invalid credentials";
+        err.style.display = "block";
+        return;
+      }
+      window.location.href = "/dashboard";
+    }catch(ex){
+      err.textContent = "Network error";
+      err.style.display = "block";
     }
-    doc.force = f;
-
-    const s = String(sig || "red");
-    if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
-
-    const sl = clampSlot(Number(slot || 0));
-    const l1 = String(line1 || "");
-    const l2 = String(line2 || "");
-
-    const packs = doc.packs || defaultPacks();
-    packs[s] = normalizePack(packs[s]);
-    packs[s][sl] = { l1, l2 };
-    doc.packs = packs;
-
-    const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
-    slotObj[s] = sl;
-    doc.slot = slotObj;
-
-    doc.v = Number(doc.v || 0) + 1;
-    doc.updated_at = now;
-
-    await doc.save();
-    res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
+  });
+</script>
+</body>
+</html>`);
 });
 
-// ESP pulls: GET /api/pull/:device_id?since=v
-app.get("/api/pull/:device_id", async (req, res) => {
+app.post("/auth/login", (req, res) => {
   try {
-    const device_id = req.params.device_id;
-    const since = Number(req.query.since || 0);
+    const { username, password } = req.body || {};
+    if (String(username || "") !== LOGIN_USER || String(password || "") !== LOGIN_PASS) {
+      return res.status(401).json({ ok: false, error: "Invalid credentials" });
+    }
+    const token = newToken();
+    sessions.set(token, { expiresAt: Date.now() + SESSION_TTL_MS });
 
-    const doc = await ensureMsgRow(device_id);
-    const v = Number(doc.v || 0);
+    // If you deploy on HTTPS (Render), set secure=true
+    const secure = Boolean(process.env.COOKIE_SECURE === "1");
+    setCookie(res, "dhm_token", token, { secure });
 
-    if (since >= v) return res.json({ ok: true, changed: false, v });
-
-    res.json({
-      ok: true,
-      changed: true,
-      device_id,
-      v,
-      force: doc.force || "",
-      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
-      packs: doc.packs || defaultPacks(),
-      slots: MSG_SLOTS,
-      updated_at: doc.updated_at || 0,
-    });
+    return res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
-// ======================
-// DASHBOARD ✅
-// ======================
-app.get("/dashboard", (req, res) => {
+app.post("/auth/logout", (req, res) => {
+  const t = getCookie(req, "dhm_token");
+  if (t) sessions.delete(t);
+  clearCookie(res, "dhm_token");
+  res.json({ ok: true });
+});
+
+app.get("/logout", (req, res) => {
+  const t = getCookie(req, "dhm_token");
+  if (t) sessions.delete(t);
+  clearCookie(res, "dhm_token");
+  res.redirect("/login");
+});
+
+// Protect the dashboard page (but keep API open for ESP)
+app.get("/dashboard", requireAuth, (req, res) => {
   res.send(`<!doctype html>
 <html>
 <head>
@@ -313,78 +523,171 @@ app.get("/dashboard", (req, res) => {
     --border:#fed7aa;
     --muted:#6b7280;
   }
-  .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
+
+  /* Subtle animated background */
+  body{
+    background:
+      radial-gradient(900px 500px at 20% 20%, rgba(249,115,22,.18), transparent 60%),
+      radial-gradient(700px 500px at 85% 35%, rgba(251,146,60,.14), transparent 55%),
+      linear-gradient(180deg, var(--bg), #ffffff);
+  }
+
+  .app{height:100%;display:flex;gap:12px;padding:12px}
+
   .sidebar{
     width:260px;min-width:260px;
-    background:var(--card);
+    background:rgba(255,255,255,.88);
     border:1px solid var(--border);
-    border-radius:16px;
+    border-radius:18px;
     display:flex;flex-direction:column;
     padding:14px 12px;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);
+    backdrop-filter: blur(10px);
+    box-shadow:
+      0 26px 56px rgba(17,24,39,.16),
+      0 12px 24px rgba(249,115,22,.10);
+    animation: slideIn .45s ease both;
   }
+
+  @keyframes slideIn{
+    from{opacity:0; transform: translateX(-10px)}
+    to{opacity:1; transform: translateX(0)}
+  }
+
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
   .brand img{
     width:46px;height:46px;border-radius:12px;
     background:#fff;object-fit:contain;padding:6px;
-    border:1px solid var(--border)
+    border:1px solid var(--border);
+    box-shadow: 0 12px 22px rgba(249,115,22,.12);
   }
-  .brandTitle{font-size:16px;font-weight:700}
-  .brandSub{font-size:12px;color:var(--muted);margin-top:2px}
+  .brandTitle{font-size:16px;font-weight:800}
+  .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
+
   .tabBtn{
     width:100%;
     padding:14px 14px;
-    border-radius:14px;
+    border-radius:16px;
     cursor:pointer;
     user-select:none;
     border:1px solid var(--border);
-    background:#fff;
-    font-weight:700;
+    background:rgba(255,255,255,.92);
+    font-weight:900;
     letter-spacing:.5px;
-    transition:.12s ease;
+    transition:.14s ease;
+    box-shadow:
+      0 10px 18px rgba(249,115,22,.07);
   }
   .tabBtn + .tabBtn{margin-top:10px}
-  .tabBtn:hover{transform:translateY(-1px)}
+  .tabBtn:hover{transform:translateY(-2px)}
   .tabBtn.active{
     background:linear-gradient(135deg, var(--orange), var(--orange2));
     color:#fff;
     border-color:var(--orange2);
-    box-shadow:0 10px 22px rgba(249,115,22,.25);
+    box-shadow: 0 18px 34px rgba(249,115,22,.28);
   }
-  .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted)}
+
+  .footer{
+    margin-top:auto;
+    padding:10px 10px 4px 10px;
+    font-size:12px;
+    color:var(--muted);
+    font-weight:900;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+  }
+
+  .logoutBtn{
+    padding:8px 10px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    cursor:pointer;
+    font-weight:900;
+    font-family:"Times New Roman", Times, serif;
+    transition:.12s ease;
+    box-shadow: 0 10px 18px rgba(17,24,39,.06);
+  }
+  .logoutBtn:hover{transform: translateY(-1px)}
+
   .content{
     flex:1;display:flex;flex-direction:column;
-    background:var(--card);
+    background:rgba(255,255,255,.88);
     border:1px solid var(--border);
-    border-radius:16px;
+    border-radius:18px;
     overflow:hidden;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);
+    backdrop-filter: blur(10px);
+    box-shadow:
+      0 26px 56px rgba(17,24,39,.16),
+      0 12px 24px rgba(249,115,22,.10);
+    animation: fadeIn .45s ease both;
   }
+  @keyframes fadeIn{from{opacity:0; transform: translateY(8px)}to{opacity:1; transform: translateY(0)}}
+
   .cards{
     display:flex;gap:10px;padding:10px;
     border-bottom:1px solid var(--border);
-    background:#fff;flex-wrap:wrap;
+    background:rgba(255,255,255,.92);
+    flex-wrap:wrap;
   }
-  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px}
-  .card .k{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.6px}
-  .card .v{font-size:22px;font-weight:700;margin-top:6px}
+  .card{
+    flex:0 0 240px;
+    border:1px solid var(--border);
+    border-radius:16px;
+    background:rgba(255,255,255,.95);
+    padding:10px 12px;
+    box-shadow:
+      0 14px 26px rgba(17,24,39,.08),
+      0 10px 18px rgba(249,115,22,.06);
+    transform: translateZ(0);
+    transition: .14s ease;
+  }
+  .card:hover{transform: translateY(-2px)}
+  .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
+  .card .v{font-size:22px;font-weight:900;margin-top:6px}
+
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
+
   .pad{padding:12px}
-  .panel{max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
-  .h1{font-weight:700;font-size:16px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-  .lbl{font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px}
-  input,select,button{
-    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
+  .panel{
+    max-width:1050px;
+    border:1px solid var(--border);
+    border-radius:18px;
+    padding:14px;
+    background:rgba(255,255,255,.95);
+    box-shadow: 0 18px 34px rgba(17,24,39,.08);
   }
-  button{cursor:pointer;background:linear-gradient(135deg, var(--orange), var(--orange2));border-color:var(--orange2);color:#fff;font-weight:700}
+  .h1{font-weight:900;font-size:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
+
+  input,select,button{
+    width:100%;padding:11px;border-radius:14px;border:1px solid var(--border);
+    background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
+    transition:.12s ease;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+  }
+  input:focus,select:focus{
+    border-color: rgba(249,115,22,.65);
+    box-shadow: 0 0 0 5px rgba(249,115,22,.16);
+    transform: translateY(-1px);
+  }
+  button{
+    cursor:pointer;
+    background:linear-gradient(135deg, var(--orange), var(--orange2));
+    border-color:var(--orange2);
+    color:#fff;font-weight:900;
+    box-shadow: 0 18px 34px rgba(249,115,22,.28);
+  }
+  button:hover{transform: translateY(-1px)}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:700}
+  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a} .bad{color:#dc2626}
+
   @media (max-width: 980px){
     .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
@@ -406,7 +709,10 @@ app.get("/dashboard", (req, res) => {
     <div class="divider"></div>
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
     <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
-    <div class="footer">Powered by <b>Arcadis</b></div>
+    <div class="footer">
+      <span>Powered by <b>Arcadis</b></span>
+      <button class="logoutBtn" onclick="doLogout()">Logout</button>
+    </div>
   </div>
 
   <div class="content">
@@ -480,6 +786,13 @@ app.get("/dashboard", (req, res) => {
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
+  }
+
+  async function doLogout(){
+    try{
+      await fetch("/auth/logout", { method:"POST" });
+    }catch(e){}
+    window.location.href = "/login";
   }
 
   const map = L.map('map').setView([17.3850,78.4867], 12);
@@ -648,6 +961,151 @@ app.get("/dashboard", (req, res) => {
 </script>
 </body>
 </html>`);
+});
+
+// ======================
+// DEVICE REGISTER + HEARTBEAT (API kept OPEN for ESP)
+// ======================
+app.post("/register", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const now = Date.now();
+
+    const doc = await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $setOnInsert: { device_id },
+        $set: {
+          lat: typeof lat === "number" ? lat : 0,
+          lng: typeof lng === "number" ? lng : 0,
+          last_seen: now,
+          status: "online",
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await ensureMsgRow(device_id);
+    res.json({ message: "Registered", device: doc });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+app.post("/heartbeat", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const now = Date.now();
+
+    await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $set: {
+          last_seen: now,
+          status: "online",
+          ...(typeof lat === "number" ? { lat } : {}),
+          ...(typeof lng === "number" ? { lng } : {}),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await ensureMsgRow(device_id);
+    res.json({ message: "OK" });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// DEVICES LIST
+// ======================
+app.get("/devices", async (req, res) => {
+  try {
+    const now = Date.now();
+    await Device.updateMany(
+      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
+      { $set: { status: "offline" } }
+    );
+
+    const data = await Device.find().sort({ last_seen: -1 });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// CLOUD MESSAGE API
+// ======================
+app.post("/api/simple", async (req, res) => {
+  try {
+    const { device_id, force, sig, slot, line1, line2 } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const doc = await ensureMsgRow(device_id);
+    const now = Date.now();
+
+    const f = String(force || "");
+    if (!(f === "" || f === "red" || f === "amber" || f === "green")) {
+      return res.status(400).json({ error: "invalid force" });
+    }
+    doc.force = f;
+
+    const s = String(sig || "red");
+    if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
+
+    const sl = clampSlot(Number(slot || 0));
+    const l1 = String(line1 || "");
+    const l2 = String(line2 || "");
+
+    const packs = doc.packs || defaultPacks();
+    packs[s] = normalizePack(packs[s]);
+    packs[s][sl] = { l1, l2 };
+    doc.packs = packs;
+
+    const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
+    slotObj[s] = sl;
+    doc.slot = slotObj;
+
+    doc.v = Number(doc.v || 0) + 1;
+    doc.updated_at = now;
+
+    await doc.save();
+    res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+app.get("/api/pull/:device_id", async (req, res) => {
+  try {
+    const device_id = req.params.device_id;
+    const since = Number(req.query.since || 0);
+
+    const doc = await ensureMsgRow(device_id);
+    const v = Number(doc.v || 0);
+
+    if (since >= v) return res.json({ ok: true, changed: false, v });
+
+    res.json({
+      ok: true,
+      changed: true,
+      device_id,
+      v,
+      force: doc.force || "",
+      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+      packs: doc.packs || defaultPacks(),
+      slots: MSG_SLOTS,
+      updated_at: doc.updated_at || 0,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
 });
 
 // ======================
