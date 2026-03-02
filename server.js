@@ -1,11 +1,9 @@
 // server.js ✅ FULL
-// ✅ Login page (admin / Ibi@123)
-// ✅ After refresh => always shows login (no session persistence)
-// ✅ One-time token (dashboard loads only once per login)
-// ✅ Orange + White unique background, 3D + animation
-// ✅ Removes the extra top pills section + removes bottom card
-// ✅ Renames to "Powered by Arcadis"
-// Put Arcadis logo in: public/arcadis.png (fallbacks: public/image.png, public/logo.png)
+// LIGHT ORANGE+WHITE + TIMES NEW ROMAN
+// ✅ Login page (ONLY logo + username + password + powered by)
+// ✅ No session persistence: Refresh always returns to login
+// ✅ Dashboard has Logout (top-right)
+// ✅ If device OFFLINE -> Send button shows ERROR (client) + server blocks /api/simple
 
 const express = require("express");
 const cors = require("cors");
@@ -15,14 +13,49 @@ const crypto = require("crypto");
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static("public")); // arcadis.png, image.png, logo.png
+
+// ======================
+// LOGIN (hardcoded as you asked)
+// ======================
+const ADMIN_USER = "admin";
+const ADMIN_PASS = "Ibi@123";
+
+// token store (in-memory) -> NOT persisted. Refresh => token lost on client => back to login.
+const TOKENS = new Map(); // token -> { exp }
+const TOKEN_TTL_MS = 30 * 60 * 1000;
+
+function makeToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+function putToken() {
+  const t = makeToken();
+  TOKENS.set(t, { exp: Date.now() + TOKEN_TTL_MS });
+  return t;
+}
+function isValidToken(t) {
+  if (!t) return false;
+  const row = TOKENS.get(t);
+  if (!row) return false;
+  if (Date.now() > row.exp) {
+    TOKENS.delete(t);
+    return false;
+  }
+  return true;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, row] of TOKENS.entries()) {
+    if (now > row.exp) TOKENS.delete(t);
+  }
+}, 60 * 1000);
 
 // ======================
 // DATABASE
 // ======================
 const MONGO_URI =
   process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
-
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
@@ -31,7 +64,7 @@ mongoose
 // ======================
 // CONSTANTS
 // ======================
-const OFFLINE_AFTER_MS = 30000; // 30s window
+const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
 
 // ======================
@@ -81,26 +114,19 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-
-  // "" | red | amber | green
-  force: { type: String, default: "" },
-
-  // active slot per signal group
+  force: { type: String, default: "" }, // "" | red | amber | green
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
     green: { type: Number, default: 0 },
     no: { type: Number, default: 0 },
   },
-
-  // message packs per signal group
   packs: {
     red: { type: Array, default: () => defaultPacks().red },
     amber: { type: Array, default: () => defaultPacks().amber },
     green: { type: Array, default: () => defaultPacks().green },
     no: { type: Array, default: () => defaultPacks().no },
   },
-
   v: { type: Number, default: 0 },
   updated_at: { type: Number, default: 0 },
 });
@@ -147,10 +173,184 @@ async function ensureMsgRow(device_id) {
   );
 }
 
+function isDeviceOnlineRow(dev) {
+  if (!dev) return false;
+  const last = Number(dev.last_seen || 0);
+  return Date.now() - last <= OFFLINE_AFTER_MS;
+}
+
+// ======================
+// AUTH MIDDLEWARE (only for dashboard + message send)
+// ======================
+function requireAuth(req, res, next) {
+  const token = req.headers["x-auth-token"];
+  if (isValidToken(token)) return next();
+  return res.status(401).json({ error: "Unauthorized" });
+}
+
 // ======================
 // HOME
 // ======================
 app.get("/", (req, res) => res.send("Server Running ✅"));
+
+// ======================
+// LOGIN PAGES
+// ======================
+app.get("/login", (req, res) => {
+  res.send(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Display Health Monitor - Login</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
+  :root{
+    --orange:#f97316;
+    --orange2:#fb923c;
+    --card:#ffffff;
+    --border:#fed7aa;
+    --muted:#6b7280;
+  }
+  .wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
+  .card{
+    width:min(520px, 94vw);
+    background:linear-gradient(180deg,#ffffff, #fffaf5);
+    border:1px solid var(--border);
+    border-radius:18px;
+    box-shadow:0 20px 40px rgba(17,24,39,.12);
+    padding:18px;
+    position:relative;
+    overflow:hidden;
+  }
+  .glow{
+    position:absolute;inset:-40px;
+    background:radial-gradient(circle at 20% 10%, rgba(249,115,22,.22), transparent 55%),
+               radial-gradient(circle at 80% 30%, rgba(251,146,60,.18), transparent 55%);
+    pointer-events:none;
+    animation:floaty 6s ease-in-out infinite;
+  }
+  @keyframes floaty{
+    0%{transform:translateY(0)}
+    50%{transform:translateY(10px)}
+    100%{transform:translateY(0)}
+  }
+  .top{display:flex;align-items:center;gap:12px;position:relative}
+  .logo{
+    width:56px;height:56px;border-radius:14px;
+    background:#fff;border:1px solid var(--border);
+    object-fit:contain;padding:6px;
+  }
+  h1{margin:0;font-size:22px;font-weight:800}
+  .sub{margin-top:4px;color:var(--muted);font-size:13px;font-weight:700}
+  form{margin-top:16px;position:relative}
+  label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
+  input{
+    width:100%;padding:12px 12px;border-radius:14px;
+    border:1px solid var(--border);background:#fff;
+    font-family:"Times New Roman", Times, serif;font-size:15px;
+    outline:none;
+  }
+  button{
+    width:100%;margin-top:14px;padding:12px;border-radius:14px;
+    border:1px solid var(--orange2);
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
+    color:#fff;font-weight:900;font-size:15px;
+    cursor:pointer;
+    box-shadow:0 14px 26px rgba(249,115,22,.25);
+    transition:.12s ease;
+  }
+  button:hover{transform:translateY(-1px)}
+  .err{margin-top:10px;color:#dc2626;font-weight:800;font-size:13px;min-height:18px}
+  .footer{
+    margin-top:14px;color:var(--muted);font-size:12px;font-weight:800
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="glow"></div>
+
+    <div class="top">
+      <img class="logo" src="/arcadis.png" alt="Arcadis"
+        onerror="this.onerror=null; this.src='/image.png';"
+      />
+      <div>
+        <h1>Display Health Monitor</h1>
+        <div class="sub">Secure Login</div>
+      </div>
+    </div>
+
+    <form id="loginForm">
+      <label>Username</label>
+      <input id="u" autocomplete="username" placeholder="admin" required />
+
+      <label>Password</label>
+      <input id="p" type="password" autocomplete="current-password" placeholder="••••••••" required />
+
+      <button type="submit">Login</button>
+      <div class="err" id="err"></div>
+    </form>
+
+    <div class="footer">Powered by <b>Arcadis</b></div>
+  </div>
+</div>
+
+<script>
+  // ALWAYS show login on refresh: we do NOT store token in localStorage/cookies.
+  const form = document.getElementById("loginForm");
+  const err  = document.getElementById("err");
+
+  form.addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    err.textContent = "";
+
+    const username = document.getElementById("u").value.trim();
+    const password = document.getElementById("p").value;
+
+    try{
+      const r = await fetch("/login",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ username, password })
+      });
+
+      if(!r.ok){
+        const out = await r.json().catch(()=>({}));
+        err.textContent = out.error || "Invalid login";
+        return;
+      }
+
+      // Server returns the dashboard HTML (with a temporary token injected into JS memory).
+      const html = await r.text();
+      document.open();
+      document.write(html);
+      document.close();
+    }catch(e){
+      err.textContent = "Network error";
+    }
+  });
+</script>
+</body>
+</html>`);
+});
+
+// POST /login -> returns dashboard HTML with in-memory token injected
+app.post("/login", (req, res) => {
+  const { username, password } = req.body || {};
+  if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+  const token = putToken();
+  return res.send(renderDashboardHTML(token));
+});
+
+// GET /dashboard always goes back to login (because token is not persisted)
+app.get("/dashboard", (req, res) => {
+  return res.redirect("/login");
+});
 
 // ======================
 // DEVICE REGISTER + HEARTBEAT
@@ -220,7 +420,6 @@ app.get("/devices", async (req, res) => {
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
       { $set: { status: "offline" } }
     );
-
     const data = await Device.find().sort({ last_seen: -1 });
     res.json(data);
   } catch (e) {
@@ -229,13 +428,21 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// CLOUD MESSAGE API
+// CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
 // ======================
 // POST /api/simple  {device_id, force, sig, slot, line1, line2}
-app.post("/api/simple", async (req, res) => {
+app.post("/api/simple", requireAuth, async (req, res) => {
   try {
     const { device_id, force, sig, slot, line1, line2 } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    // block offline device
+    const dev = await Device.findOne({ device_id });
+    if (!isDeviceOnlineRow(dev)) {
+      return res.status(400).json({
+        error: "Device is OFFLINE. Check device WiFi / power / network.",
+      });
+    }
 
     const doc = await ensureMsgRow(device_id);
     const now = Date.now();
@@ -272,7 +479,7 @@ app.post("/api/simple", async (req, res) => {
   }
 });
 
-// ESP pulls: GET /api/pull/:device_id?since=v
+// ESP pulls: GET /api/pull/:device_id?since=v   (no auth for ESP)
 app.get("/api/pull/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -300,376 +507,10 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// LOGIN (NO PERSISTENCE) ✅
+// DASHBOARD HTML RENDER (token lives only in JS memory)
 // ======================
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "Ibi@123";
-
-// one-time dashboard tokens (refresh => login again)
-const loginTokens = new Map(); // token -> expiryMs
-const TOKEN_TTL_MS = 2 * 60 * 1000;
-
-function makeToken() {
-  return crypto.randomBytes(24).toString("hex");
-}
-
-function cleanupTokens() {
-  const now = Date.now();
-  for (const [t, exp] of loginTokens.entries()) {
-    if (exp <= now) loginTokens.delete(t);
-  }
-}
-
-app.get("/dashboard", (req, res) => {
-  // always force login page on refresh / direct open
-  res.redirect(302, "/login");
-});
-
-app.get("/login", (req, res) => {
-  res.send(`<!doctype html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Display Health Monitor - Login</title>
-<style>
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;overflow:hidden;color:#111827}
-
-  :root{
-    --orange:#f97316;
-    --orange2:#fb923c;
-    --bg1:#fff7ed;
-    --bg2:#ffffff;
-    --border:#fed7aa;
-    --shadow:rgba(17,24,39,.14);
-    --muted:#6b7280;
-  }
-
-  body{
-    background:
-      radial-gradient(900px 500px at 15% 12%, rgba(249,115,22,.22), transparent 55%),
-      radial-gradient(700px 420px at 88% 28%, rgba(251,146,60,.18), transparent 55%),
-      linear-gradient(180deg, var(--bg1), var(--bg2));
-  }
-
-  .wrap{
-    height:100%;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:18px;
-  }
-
-  .card{
-    width:min(980px, 96vw);
-    min-height:560px;
-    border-radius:26px;
-    border:1px solid var(--border);
-    background: rgba(255,255,255,.78);
-    box-shadow: 0 28px 70px var(--shadow);
-    backdrop-filter: blur(10px);
-    position:relative;
-    overflow:hidden;
-    transform: translateZ(0);
-    animation: pop .55s ease-out both;
-  }
-
-  @keyframes pop{
-    from{transform:translateY(10px) scale(.985); opacity:.0}
-    to{transform:translateY(0) scale(1); opacity:1}
-  }
-
-  .shine{
-    position:absolute; inset:-40%;
-    background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,.45) 45%, transparent 60%);
-    transform: rotate(12deg);
-    animation: shine 3.6s ease-in-out infinite;
-    pointer-events:none;
-  }
-  @keyframes shine{
-    0%{transform:translateX(-25%) rotate(12deg)}
-    50%{transform:translateX(25%) rotate(12deg)}
-    100%{transform:translateX(-25%) rotate(12deg)}
-  }
-
-  .header{
-    display:flex; align-items:center; gap:14px;
-    padding:22px 24px 12px 24px;
-  }
-  .logo{
-    width:56px; height:56px;
-    border-radius:16px;
-    border:1px solid var(--border);
-    background:#fff;
-    display:flex; align-items:center; justify-content:center;
-    box-shadow: 0 14px 30px rgba(249,115,22,.18);
-  }
-  .logo img{width:44px;height:44px;object-fit:contain}
-  .title{
-    font-size:30px;
-    font-weight:900;
-    letter-spacing:.2px;
-  }
-  .sub{
-    margin-top:4px;
-    color:var(--muted);
-    font-size:14px;
-    font-weight:700;
-  }
-
-  .hr{height:1px;background:rgba(254,215,170,.9); margin:10px 24px 0 24px}
-
-  .content{
-    display:grid;
-    grid-template-columns: 1.1fr .9fr;
-    gap:18px;
-    padding:22px 24px;
-  }
-
-  .left{
-    border-radius:22px;
-    border:1px solid var(--border);
-    background: rgba(255,255,255,.86);
-    padding:18px;
-    box-shadow: 0 18px 40px rgba(17,24,39,.08);
-  }
-
-  .bigNote{
-    font-size:16px; font-weight:900;
-    margin:0 0 10px 0;
-  }
-  .smallNote{
-    margin:0;
-    color:var(--muted);
-    font-weight:700;
-    line-height:1.5;
-    font-size:13px;
-  }
-
-  .right{
-    border-radius:22px;
-    border:1px solid var(--border);
-    background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.75));
-    padding:18px;
-    box-shadow: 0 18px 40px rgba(17,24,39,.08);
-  }
-
-  label{
-    display:block;
-    margin:10px 0 6px 0;
-    font-weight:900;
-    color:#374151;
-    font-size:13px;
-  }
-  input{
-    width:100%;
-    padding:12px 12px;
-    border-radius:14px;
-    border:1px solid var(--border);
-    outline:none;
-    font-family:"Times New Roman", Times, serif;
-    font-size:15px;
-    background:#fff;
-    box-shadow: inset 0 2px 0 rgba(0,0,0,.03);
-  }
-  input:focus{
-    border-color: var(--orange2);
-    box-shadow: 0 0 0 4px rgba(249,115,22,.18);
-  }
-
-  .btn{
-    margin-top:14px;
-    width:100%;
-    padding:12px 14px;
-    border-radius:14px;
-    border:1px solid var(--orange2);
-    background: linear-gradient(135deg, var(--orange), var(--orange2));
-    color:#fff;
-    font-weight:900;
-    cursor:pointer;
-    transition:.12s ease;
-    box-shadow: 0 18px 36px rgba(249,115,22,.25);
-  }
-  .btn:hover{transform:translateY(-1px)}
-  .btn:active{transform:translateY(0px) scale(.99)}
-
-  .msg{
-    margin-top:10px;
-    font-weight:900;
-    font-size:13px;
-    color:var(--muted);
-  }
-  .msg.bad{color:#dc2626}
-  .msg.ok{color:#16a34a}
-
-  .footer{
-    position:absolute;
-    left:0; right:0; bottom:0;
-    padding:14px 24px;
-    border-top:1px solid rgba(254,215,170,.9);
-    background: rgba(255,255,255,.75);
-    display:flex; justify-content:space-between; align-items:center;
-    font-size:13px; font-weight:900;
-    color:#374151;
-  }
-  .footer span{color:var(--muted); font-weight:900}
-  .powered b{color:#111827}
-
-  /* dashboard container */
-  #dashWrap{
-    display:none;
-    position:absolute;
-    inset:0;
-    background:#fff;
-  }
-  #dashFrame{
-    width:100%; height:100%;
-    border:0;
-  }
-
-  @media (max-width: 880px){
-    .content{grid-template-columns:1fr}
-    .card{min-height:640px}
-  }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="shine"></div>
-
-    <div id="loginWrap">
-      <div class="header">
-        <div class="logo">
-          <img id="arcLogo" src="/arcadis.png" alt="Arcadis"
-            onerror="this.onerror=null; this.src='/image.png';" />
-        </div>
-        <div>
-          <div class="title">Display Health Monitor</div>
-          <div class="sub">Operations Console • Secure Access</div>
-        </div>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="content">
-        <div class="left">
-          <p class="bigNote">Access Control</p>
-          <p class="smallNote">
-            Login is required to view device status, map markers, and send cloud messages.
-            Refresh will always return to the login page.
-          </p>
-          <p class="smallNote" style="margin-top:10px">
-            Recommended: keep credentials private and share dashboard access only with authorized operators.
-          </p>
-        </div>
-
-        <div class="right">
-          <label>Username</label>
-          <input id="u" autocomplete="username" placeholder="admin" />
-
-          <label>Password</label>
-          <input id="p" type="password" autocomplete="current-password" placeholder="••••••••" />
-
-          <button class="btn" onclick="doLogin()">Login</button>
-          <div id="m" class="msg">Enter credentials to continue.</div>
-        </div>
-      </div>
-
-      <div class="footer">
-        <div class="powered"><span>Powered by</span> <b>Arcadis</b></div>
-        <div><span>Theme:</span> Orange + White</div>
-      </div>
-    </div>
-
-    <div id="dashWrap">
-      <iframe id="dashFrame" src="about:blank"></iframe>
-    </div>
-  </div>
-</div>
-
-<script>
-  // logo fallback chain
-  const img = document.getElementById("arcLogo");
-  img.addEventListener("error", ()=>{
-    if(img.src.endsWith("/arcadis.png")) img.src="/image.png";
-    else if(img.src.endsWith("/image.png")) img.src="/logo.png";
-  });
-
-  async function doLogin(){
-    const u = document.getElementById("u").value.trim();
-    const p = document.getElementById("p").value;
-    const m = document.getElementById("m");
-    m.className = "msg";
-    m.textContent = "Checking...";
-
-    try{
-      const r = await fetch("/api/login", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ username:u, password:p })
-      });
-      const out = await r.json();
-
-      if(!r.ok || !out.ok){
-        m.className = "msg bad";
-        m.textContent = "Invalid login.";
-        return;
-      }
-
-      m.className = "msg ok";
-      m.textContent = "Login successful. Loading dashboard...";
-
-      // Load dashboard inside iframe using one-time token
-      const token = out.token;
-      document.getElementById("loginWrap").style.display = "none";
-      document.getElementById("dashWrap").style.display = "block";
-      document.getElementById("dashFrame").src = "/dashboard_embed?token=" + encodeURIComponent(token);
-
-    }catch(e){
-      m.className = "msg bad";
-      m.textContent = "Network error.";
-    }
-  }
-
-  // Enter key submits
-  document.getElementById("p").addEventListener("keydown", (e)=>{
-    if(e.key === "Enter") doLogin();
-  });
-</script>
-</body>
-</html>`);
-});
-
-app.post("/api/login", (req, res) => {
-  cleanupTokens();
-  const { username, password } = req.body || {};
-
-  if (String(username || "") === ADMIN_USER && String(password || "") === ADMIN_PASS) {
-    const token = makeToken();
-    loginTokens.set(token, Date.now() + TOKEN_TTL_MS);
-    return res.json({ ok: true, token });
-  }
-  return res.status(401).json({ ok: false });
-});
-
-// ======================
-// DASHBOARD EMBED (1-time token) ✅
-// ======================
-app.get("/dashboard_embed", (req, res) => {
-  cleanupTokens();
-  const token = String(req.query.token || "");
-  const exp = loginTokens.get(token);
-
-  if (!token || !exp || exp <= Date.now()) {
-    return res.redirect(302, "/login");
-  }
-
-  // one-time use => refresh goes back to login
-  loginTokens.delete(token);
-
-  res.send(`<!doctype html>
+function renderDashboardHTML(TOKEN) {
+  return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
@@ -690,82 +531,90 @@ app.get("/dashboard_embed", (req, res) => {
     --border:#fed7aa;
     --muted:#6b7280;
   }
-  .app{height:100%;display:flex;gap:12px;padding:12px;background:
-    radial-gradient(900px 500px at 12% 18%, rgba(249,115,22,.16), transparent 56%),
-    radial-gradient(700px 420px at 92% 28%, rgba(251,146,60,.14), transparent 58%),
-    linear-gradient(180deg, var(--bg), #ffffff);
-  }
+  .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
   .sidebar{
-    width:260px;min-width:260px;
-    background:var(--card);
-    border:1px solid var(--border);
-    border-radius:16px;
-    display:flex;flex-direction:column;
-    padding:14px 12px;
+    width:260px;min-width:260px;background:var(--card);
+    border:1px solid var(--border);border-radius:16px;
+    display:flex;flex-direction:column;padding:14px 12px;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
   .brand img{
-    width:46px;height:46px;border-radius:12px;
-    background:#fff;object-fit:contain;padding:6px;
-    border:1px solid var(--border)
+    width:46px;height:46px;border-radius:12px;background:#fff;
+    object-fit:contain;padding:6px;border:1px solid var(--border)
   }
-  .brandTitle{font-size:16px;font-weight:700}
-  .brandSub{font-size:12px;color:var(--muted);margin-top:2px}
+  .brandTitle{font-size:16px;font-weight:800}
+  .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
   .tabBtn{
-    width:100%;
-    padding:14px 14px;
-    border-radius:14px;
-    cursor:pointer;
-    user-select:none;
-    border:1px solid var(--border);
-    background:#fff;
-    font-weight:700;
-    letter-spacing:.5px;
-    transition:.12s ease;
+    width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;
+    user-select:none;border:1px solid var(--border);background:#fff;
+    font-weight:900;letter-spacing:.5px;transition:.12s ease;
   }
   .tabBtn + .tabBtn{margin-top:10px}
   .tabBtn:hover{transform:translateY(-1px)}
   .tabBtn.active{
-    background:linear-gradient(135deg, var(--orange), var(--orange2));
-    color:#fff;
-    border-color:var(--orange2);
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
+    color:#fff;border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-  .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted)}
+  .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
   .content{
-    flex:1;display:flex;flex-direction:column;
-    background:var(--card);
-    border:1px solid var(--border);
-    border-radius:16px;
-    overflow:hidden;
+    flex:1;display:flex;flex-direction:column;background:var(--card);
+    border:1px solid var(--border);border-radius:16px;overflow:hidden;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
+    position:relative;
   }
+  /* Top right logout */
+  .topbar{
+    height:54px;display:flex;align-items:center;justify-content:flex-end;
+    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
+  }
+  .logoutBtn{
+    border:1px solid var(--border);
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
+    color:#fff;
+    font-weight:900;
+    border-radius:14px;
+    padding:10px 14px;
+    cursor:pointer;
+    box-shadow:0 12px 22px rgba(249,115,22,.22);
+    transition:.12s ease;
+  }
+  .logoutBtn:hover{transform:translateY(-1px)}
   .cards{
-    display:flex;gap:10px;padding:10px;
-    border-bottom:1px solid var(--border);
+    display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
     background:#fff;flex-wrap:wrap;
   }
-  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px}
-  .card .k{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.6px}
-  .card .v{font-size:22px;font-weight:700;margin-top:6px}
+  .card{
+    flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;
+    padding:10px 12px;
+  }
+  .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
+  .card .v{font-size:22px;font-weight:900;margin-top:6px}
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
   .pad{padding:12px}
-  .panel{max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
-  .h1{font-weight:700;font-size:16px}
+  .panel{
+    max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
+  }
+  .h1{font-weight:900;font-size:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-  .lbl{font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px}
+  .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
   input,select,button{
     width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
+    background:#fff;color:#111827;outline:none;font-size:14px;
+    font-family:"Times New Roman", Times, serif;
   }
-  button{cursor:pointer;background:linear-gradient(135deg, var(--orange), var(--orange2));border-color:var(--orange2);color:#fff;font-weight:700}
+  button.sendBtn{
+    cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));
+    border-color:var(--orange2);color:#fff;font-weight:900;
+  }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:700}
-  .ok{color:#16a34a} .bad{color:#dc2626}
+  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
+  .ok{color:#16a34a}
+  .bad{color:#dc2626}
   @media (max-width: 980px){
     .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
@@ -791,6 +640,10 @@ app.get("/dashboard_embed", (req, res) => {
   </div>
 
   <div class="content">
+    <div class="topbar">
+      <button class="logoutBtn" onclick="logout()">Logout</button>
+    </div>
+
     <div class="cards">
       <div class="card"><div class="k">TOTAL DEVICES</div><div class="v" id="total">0</div></div>
       <div class="card"><div class="k">ONLINE</div><div class="v" id="on">0</div></div>
@@ -843,10 +696,10 @@ app.get("/dashboard_embed", (req, res) => {
           </div>
 
           <div class="row">
-            <button onclick="sendToESP()">Send to ESP</button>
+            <button class="sendBtn" onclick="sendToESP()">Send to ESP</button>
           </div>
 
-          <div class="statusLine" id="statusTxt">Status: Idle</div>
+          <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
         </div>
       </div>
     </div>
@@ -855,6 +708,17 @@ app.get("/dashboard_embed", (req, res) => {
 </div>
 
 <script>
+  // token exists ONLY in JS memory (refresh => lost => login again)
+  const AUTH_TOKEN = "${TOKEN}";
+
+  // set URL to /dashboard (no token in URL). Refresh will go /dashboard -> server redirects to login.
+  try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
+
+  function logout(){
+    // no persistence. just go to login.
+    window.location.href = "/login";
+  }
+
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
     document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
@@ -901,6 +765,8 @@ app.get("/dashboard_embed", (req, res) => {
   const forceSel = document.getElementById("forceSel");
   const statusTxt = document.getElementById("statusTxt");
 
+  let DEVICE_CACHE = []; // keep status here
+
   function setStatus(text, ok){
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
@@ -942,14 +808,15 @@ app.get("/dashboard_embed", (req, res) => {
     try{
       const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
       const data = await res.json();
+      DEVICE_CACHE = Array.isArray(data) ? data : [];
 
       let on=0, off=0;
-      (data||[]).forEach(d=> (d.status==="online"?on++:off++));
-      document.getElementById("total").innerText = (data||[]).length;
+      DEVICE_CACHE.forEach(d=> (d.status==="online"?on++:off++));
+      document.getElementById("total").innerText = DEVICE_CACHE.length;
       document.getElementById("on").innerText = on;
       document.getElementById("off").innerText = off;
 
-      (data||[]).forEach(d=>{
+      DEVICE_CACHE.forEach(d=>{
         const isOn = (d.status==="online");
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
@@ -968,7 +835,7 @@ app.get("/dashboard_embed", (req, res) => {
 
       const cur = devSel.value;
       devSel.innerHTML = "";
-      (data||[]).forEach(d=>{
+      DEVICE_CACHE.forEach(d=>{
         const opt = document.createElement("option");
         opt.value = d.device_id;
         opt.textContent = d.device_id + " (" + d.status + ")";
@@ -982,9 +849,23 @@ app.get("/dashboard_embed", (req, res) => {
     }
   }
 
+  function currentDeviceStatus(device_id){
+    const d = DEVICE_CACHE.find(x=>x.device_id===device_id);
+    return d ? (d.status||"offline") : "offline";
+  }
+
   async function sendToESP(){
     const device_id = devSel.value;
-    if(!device_id){ setStatus("No device selected", false); return; }
+    if(!device_id){
+      setStatus("No device selected", false);
+      return;
+    }
+
+    const st = currentDeviceStatus(device_id);
+    if(st !== "online"){
+      setStatus("Device OFFLINE. Check device WiFi / power.", false);
+      return;
+    }
 
     const payload = {
       device_id,
@@ -1000,12 +881,16 @@ app.get("/dashboard_embed", (req, res) => {
     try{
       const r = await fetch("/api/simple", {
         method:"POST",
-        headers:{ "Content-Type":"application/json" },
+        headers:{
+          "Content-Type":"application/json",
+          "X-Auth-Token": AUTH_TOKEN
+        },
         body: JSON.stringify(payload)
       });
-      const out = await r.json();
+
+      const out = await r.json().catch(()=> ({}));
       if(!r.ok){
-        setStatus("Failed: " + (out.error||"error"), false);
+        setStatus(out.error || "Send failed", false);
         return;
       }
       setStatus("Sent", true);
@@ -1028,8 +913,8 @@ app.get("/dashboard_embed", (req, res) => {
   });
 </script>
 </body>
-</html>`);
-});
+</html>`;
+}
 
 // ======================
 // START SERVER ✅
