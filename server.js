@@ -1,5 +1,4 @@
-// server.js ✅ FULL (LIGHT THEME ORANGE+WHITE + TIMES NEW ROMAN + NO TOP ICONS + NO TAB ICONS + POWERED BY ARCADIS + LOGO FALLBACKS)
-// Put Arcadis logo in: public/arcadis.png  (fallbacks: public/image.png, public/logo.png)
+// server.js ✅ FULL (LIGHT ORANGE+WHITE + TIMES NEW ROMAN + NO TOP ICONS + NO TAB ICONS + POWERED BY ARCADIS + LOGO FALLBACKS)
 
 const express = require("express");
 const cors = require("cors");
@@ -8,7 +7,7 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // serves /arcadis.png, /image.png, /logo.png etc.
+app.use(express.static("public"));
 
 // ======================
 // DATABASE
@@ -72,21 +71,27 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
+
   force: { type: String, default: "" }, // "" | red | amber | green
+
+  // active slot per signal group (this is what ESP uses)
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
     green: { type: Number, default: 0 },
     no: { type: Number, default: 0 },
   },
+
+  // message packs per signal group
   packs: {
     red: { type: Array, default: () => defaultPacks().red },
     amber: { type: Array, default: () => defaultPacks().amber },
     green: { type: Array, default: () => defaultPacks().green },
     no: { type: Array, default: () => defaultPacks().no },
   },
-  v: { type: Number, default: 0 },
-  updated_at: { type: Number, default: 0 },
+
+  v: { type: Number, default: 0 },         // version
+  updated_at: { type: Number, default: 0 }, // timestamp
 });
 
 const Device = mongoose.model("Device", deviceSchema);
@@ -195,7 +200,7 @@ app.post("/heartbeat", async (req, res) => {
 });
 
 // ======================
-// DEVICES LIST (updates offline state)
+// DEVICES LIST
 // ======================
 app.get("/devices", async (req, res) => {
   try {
@@ -246,7 +251,6 @@ app.post("/api/simple", async (req, res) => {
     slotObj[s] = sl;
     doc.slot = slotObj;
 
-    // bump version so ESP sees "changed"
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
 
@@ -285,7 +289,7 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD ✅ (LIGHT ORANGE+WHITE + TIMES NEW ROMAN + LEFT TABS TEXT ONLY + NO TOP ICONS + POWERED BY ARCADIS + LOGO FALLBACKS)
+// DASHBOARD ✅
 // ======================
 app.get("/dashboard", (req, res) => {
   res.send(`<!doctype html>
@@ -301,19 +305,15 @@ app.get("/dashboard", (req, res) => {
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
-
   :root{
     --orange:#f97316;
     --orange2:#fb923c;
-    --bg:#fff7ed;        /* light orange background */
+    --bg:#fff7ed;
     --card:#ffffff;
-    --border:#fed7aa;    /* soft orange border */
+    --border:#fed7aa;
     --muted:#6b7280;
   }
-
   .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
-
-  /* SIDEBAR */
   .sidebar{
     width:260px;min-width:260px;
     background:var(--card);
@@ -332,7 +332,6 @@ app.get("/dashboard", (req, res) => {
   .brandTitle{font-size:16px;font-weight:700}
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px}
   .divider{height:1px;background:var(--border);margin:8px 6px}
-
   .tabBtn{
     width:100%;
     padding:14px 14px;
@@ -353,90 +352,39 @@ app.get("/dashboard", (req, res) => {
     border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-
-  .footer{
-    margin-top:auto;
-    padding:10px 10px 4px 10px;
-    font-size:12px;
-    color:var(--muted);
-  }
-
-  /* MAIN */
+  .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted)}
   .content{
-    flex:1;
-    display:flex;
-    flex-direction:column;
+    flex:1;display:flex;flex-direction:column;
     background:var(--card);
     border:1px solid var(--border);
     border-radius:16px;
     overflow:hidden;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
-
-  /* CARDS (moved up already; tight spacing) */
   .cards{
-    display:flex;gap:10px;
-    padding:10px;
+    display:flex;gap:10px;padding:10px;
     border-bottom:1px solid var(--border);
-    background:#fff;
-    flex-wrap:wrap;
+    background:#fff;flex-wrap:wrap;
   }
-  .card{
-    flex:0 0 240px;
-    border:1px solid var(--border);
-    border-radius:14px;
-    background:#fff;
-    padding:10px 12px;
-  }
+  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px}
   .card .k{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:700;margin-top:6px}
-
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
-
-  /* MESSAGES PANEL */
   .pad{padding:12px}
-  .panel{
-    max-width:1050px;
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:14px;
-    background:#fff;
-  }
+  .panel{max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
   .h1{font-weight:700;font-size:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
   .lbl{font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px}
-
   input,select,button{
-    width:100%;
-    padding:11px;
-    border-radius:12px;
-    border:1px solid var(--border);
-    background:#fff;
-    color:#111827;
-    outline:none;
-    font-size:14px;
-    font-family:"Times New Roman", Times, serif;
+    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
+    background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
   }
-  button{
-    cursor:pointer;
-    background:linear-gradient(135deg, var(--orange), var(--orange2));
-    border-color:var(--orange2);
-    color:#fff;
-    font-weight:700;
-  }
+  button{cursor:pointer;background:linear-gradient(135deg, var(--orange), var(--orange2));border-color:var(--orange2);color:#fff;font-weight:700}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-
-  .statusLine{
-    margin-top:10px;
-    font-size:12px;
-    color:var(--muted);
-    font-weight:700;
-  }
-  .ok{color:#16a34a}
-  .bad{color:#dc2626}
-
+  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:700}
+  .ok{color:#16a34a} .bad{color:#dc2626}
   @media (max-width: 980px){
     .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
@@ -447,40 +395,29 @@ app.get("/dashboard", (req, res) => {
 
 <body>
 <div class="app">
-
-  <!-- SIDEBAR -->
   <div class="sidebar">
     <div class="brand">
-      <img id="arcLogo" src="/arcadis.png" alt="Arcadis"
-        onerror="this.onerror=null; this.src='/image.png';"
-      />
+      <img id="arcLogo" src="/arcadis.png" alt="Arcadis" onerror="this.onerror=null; this.src='/image.png';" />
       <div>
         <div class="brandTitle">Display Health Monitor</div>
         <div class="brandSub">Arcadis Operations</div>
       </div>
     </div>
     <div class="divider"></div>
-
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
     <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
-
     <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
 
-  <!-- MAIN CONTENT -->
   <div class="content">
-
-    <!-- CARDS -->
     <div class="cards">
       <div class="card"><div class="k">TOTAL DEVICES</div><div class="v" id="total">0</div></div>
       <div class="card"><div class="k">ONLINE</div><div class="v" id="on">0</div></div>
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
     </div>
 
-    <!-- MAP VIEW -->
     <div class="view active" id="viewMap"><div id="map"></div></div>
 
-    <!-- MESSAGE VIEW -->
     <div class="view" id="viewMsg">
       <div class="pad">
         <div class="panel">
@@ -545,7 +482,6 @@ app.get("/dashboard", (req, res) => {
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
   }
 
-  // Map (Google tiles like you had)
   const map = L.map('map').setView([17.3850,78.4867], 12);
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
     subdomains:['mt0','mt1','mt2','mt3'],
@@ -567,7 +503,6 @@ app.get("/dashboard", (req, res) => {
     return L.divIcon({ className:"", html, iconSize:[28,28], iconAnchor:[14,28] });
   }
 
-  // Templates (for slot dropdown + auto-fill)
   const templates = ${JSON.stringify(defaultPacks())};
   const MSG_SLOTS = ${MSG_SLOTS};
   const SIGS = [
@@ -577,7 +512,6 @@ app.get("/dashboard", (req, res) => {
     {k:"no",    name:"NO SIGNAL"}
   ];
 
-  // UI elements
   const devSel = document.getElementById("devSel");
   const sigSel = document.getElementById("sigSel");
   const slotSel= document.getElementById("slotSel");
@@ -651,7 +585,6 @@ app.get("/dashboard", (req, res) => {
         }
       });
 
-      // device dropdown
       const cur = devSel.value;
       devSel.innerHTML = "";
       (data||[]).forEach(d=>{
@@ -668,7 +601,6 @@ app.get("/dashboard", (req, res) => {
     }
   }
 
-  // SEND ONLY ON BUTTON CLICK ✅
   async function sendToESP(){
     const device_id = devSel.value;
     if(!device_id){ setStatus("No device selected", false); return; }
@@ -708,7 +640,6 @@ app.get("/dashboard", (req, res) => {
   loadDevices(true);
   setInterval(()=>loadDevices(false), 2000);
 
-  // logo fallback chain
   const img = document.getElementById("arcLogo");
   img.addEventListener("error", ()=>{
     if(img.src.endsWith("/arcadis.png")) img.src="/image.png";
