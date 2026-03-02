@@ -1,5 +1,11 @@
-// server.js ✅ FULL (LOGIN admin / Ibi@123 + ORANGE/WHITE 3D + ANIMATIONS)
-// Put Arcadis logo in: public/arcadis.png  (fallbacks: public/image.png, public/logo.png)
+// server.js ✅ FULL
+// ✅ Login page (admin / Ibi@123)
+// ✅ After refresh => always shows login (no session persistence)
+// ✅ One-time token (dashboard loads only once per login)
+// ✅ Orange + White unique background, 3D + animation
+// ✅ Removes the extra top pills section + removes bottom card
+// ✅ Renames to "Powered by Arcadis"
+// Put Arcadis logo in: public/arcadis.png (fallbacks: public/image.png, public/logo.png)
 
 const express = require("express");
 const cors = require("cors");
@@ -12,72 +18,11 @@ app.use(express.json());
 app.use(express.static("public"));
 
 // ======================
-// SIMPLE LOGIN CONFIG
-// ======================
-const LOGIN_USER = "admin";
-const LOGIN_PASS = "Ibi@123"; // as you requested
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-
-// token -> { expiresAt }
-const sessions = new Map();
-
-function newToken() {
-  return crypto.randomBytes(24).toString("hex");
-}
-
-function getCookie(req, name) {
-  const c = req.headers.cookie || "";
-  const parts = c.split(";").map((x) => x.trim());
-  for (const p of parts) {
-    const eq = p.indexOf("=");
-    if (eq > 0) {
-      const k = p.slice(0, eq);
-      const v = p.slice(eq + 1);
-      if (k === name) return decodeURIComponent(v);
-    }
-  }
-  return "";
-}
-
-function setCookie(res, name, value, opts = {}) {
-  const { maxAgeMs = SESSION_TTL_MS, httpOnly = true, sameSite = "Lax", path = "/", secure = false } = opts;
-  const parts = [
-    `${name}=${encodeURIComponent(value)}`,
-    `Path=${path}`,
-    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
-    `SameSite=${sameSite}`,
-  ];
-  if (httpOnly) parts.push("HttpOnly");
-  if (secure) parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
-}
-
-function clearCookie(res, name) {
-  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax`);
-}
-
-function isAuthed(req) {
-  const t = getCookie(req, "dhm_token");
-  if (!t) return false;
-  const s = sessions.get(t);
-  if (!s) return false;
-  if (Date.now() > s.expiresAt) {
-    sessions.delete(t);
-    return false;
-  }
-  return true;
-}
-
-function requireAuth(req, res, next) {
-  if (isAuthed(req)) return next();
-  // If user opens /dashboard directly, send to /login
-  return res.redirect("/login");
-}
-
-// ======================
 // DATABASE
 // ======================
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
@@ -136,19 +81,26 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-  force: { type: String, default: "" }, // "" | red | amber | green
+
+  // "" | red | amber | green
+  force: { type: String, default: "" },
+
+  // active slot per signal group
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
     green: { type: Number, default: 0 },
     no: { type: Number, default: 0 },
   },
+
+  // message packs per signal group
   packs: {
     red: { type: Array, default: () => defaultPacks().red },
     amber: { type: Array, default: () => defaultPacks().amber },
     green: { type: Array, default: () => defaultPacks().green },
     no: { type: Array, default: () => defaultPacks().no },
   },
+
   v: { type: Number, default: 0 },
   updated_at: { type: Number, default: 0 },
 });
@@ -201,307 +153,522 @@ async function ensureMsgRow(device_id) {
 app.get("/", (req, res) => res.send("Server Running ✅"));
 
 // ======================
-// AUTH PAGES + API
+// DEVICE REGISTER + HEARTBEAT
 // ======================
-app.get("/login", (req, res) => {
-  // If already authed, go dashboard
-  if (isAuthed(req)) return res.redirect("/dashboard");
+app.post("/register", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
 
+    const now = Date.now();
+
+    const doc = await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $setOnInsert: { device_id },
+        $set: {
+          lat: typeof lat === "number" ? lat : 0,
+          lng: typeof lng === "number" ? lng : 0,
+          last_seen: now,
+          status: "online",
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await ensureMsgRow(device_id);
+    res.json({ message: "Registered", device: doc });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+app.post("/heartbeat", async (req, res) => {
+  try {
+    const { device_id, lat, lng } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const now = Date.now();
+
+    await Device.findOneAndUpdate(
+      { device_id },
+      {
+        $set: {
+          last_seen: now,
+          status: "online",
+          ...(typeof lat === "number" ? { lat } : {}),
+          ...(typeof lng === "number" ? { lng } : {}),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    await ensureMsgRow(device_id);
+    res.json({ message: "OK" });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// DEVICES LIST
+// ======================
+app.get("/devices", async (req, res) => {
+  try {
+    const now = Date.now();
+    await Device.updateMany(
+      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
+      { $set: { status: "offline" } }
+    );
+
+    const data = await Device.find().sort({ last_seen: -1 });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// CLOUD MESSAGE API
+// ======================
+// POST /api/simple  {device_id, force, sig, slot, line1, line2}
+app.post("/api/simple", async (req, res) => {
+  try {
+    const { device_id, force, sig, slot, line1, line2 } = req.body || {};
+    if (!device_id) return res.status(400).json({ error: "device_id required" });
+
+    const doc = await ensureMsgRow(device_id);
+    const now = Date.now();
+
+    const f = String(force || "");
+    if (!(f === "" || f === "red" || f === "amber" || f === "green")) {
+      return res.status(400).json({ error: "invalid force" });
+    }
+    doc.force = f;
+
+    const s = String(sig || "red");
+    if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
+
+    const sl = clampSlot(Number(slot || 0));
+    const l1 = String(line1 || "");
+    const l2 = String(line2 || "");
+
+    const packs = doc.packs || defaultPacks();
+    packs[s] = normalizePack(packs[s]);
+    packs[s][sl] = { l1, l2 };
+    doc.packs = packs;
+
+    const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
+    slotObj[s] = sl;
+    doc.slot = slotObj;
+
+    doc.v = Number(doc.v || 0) + 1;
+    doc.updated_at = now;
+
+    await doc.save();
+    res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ESP pulls: GET /api/pull/:device_id?since=v
+app.get("/api/pull/:device_id", async (req, res) => {
+  try {
+    const device_id = req.params.device_id;
+    const since = Number(req.query.since || 0);
+
+    const doc = await ensureMsgRow(device_id);
+    const v = Number(doc.v || 0);
+
+    if (since >= v) return res.json({ ok: true, changed: false, v });
+
+    res.json({
+      ok: true,
+      changed: true,
+      device_id,
+      v,
+      force: doc.force || "",
+      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+      packs: doc.packs || defaultPacks(),
+      slots: MSG_SLOTS,
+      updated_at: doc.updated_at || 0,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// LOGIN (NO PERSISTENCE) ✅
+// ======================
+const ADMIN_USER = "admin";
+const ADMIN_PASS = "Ibi@123";
+
+// one-time dashboard tokens (refresh => login again)
+const loginTokens = new Map(); // token -> expiryMs
+const TOKEN_TTL_MS = 2 * 60 * 1000;
+
+function makeToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function cleanupTokens() {
+  const now = Date.now();
+  for (const [t, exp] of loginTokens.entries()) {
+    if (exp <= now) loginTokens.delete(t);
+  }
+}
+
+app.get("/dashboard", (req, res) => {
+  // always force login page on refresh / direct open
+  res.redirect(302, "/login");
+});
+
+app.get("/login", (req, res) => {
   res.send(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Login - Display Health Monitor</title>
+<title>Display Health Monitor - Login</title>
 <style>
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;overflow:hidden;color:#111827}
+  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;overflow:hidden;color:#111827}
+
   :root{
     --orange:#f97316;
     --orange2:#fb923c;
-    --bg:#fff7ed;
-    --card:#ffffff;
+    --bg1:#fff7ed;
+    --bg2:#ffffff;
     --border:#fed7aa;
+    --shadow:rgba(17,24,39,.14);
     --muted:#6b7280;
   }
-  .wrap{
-    height:100%;display:flex;align-items:center;justify-content:center;
-    padding:18px;
+
+  body{
     background:
-      radial-gradient(900px 500px at 20% 20%, rgba(249,115,22,.20), transparent 60%),
-      radial-gradient(700px 500px at 80% 30%, rgba(251,146,60,.18), transparent 55%),
-      linear-gradient(180deg, #fff7ed, #ffffff);
+      radial-gradient(900px 500px at 15% 12%, rgba(249,115,22,.22), transparent 55%),
+      radial-gradient(700px 420px at 88% 28%, rgba(251,146,60,.18), transparent 55%),
+      linear-gradient(180deg, var(--bg1), var(--bg2));
+  }
+
+  .wrap{
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
   }
 
   .card{
     width:min(980px, 96vw);
-    min-height:520px;
-    border-radius:22px;
+    min-height:560px;
+    border-radius:26px;
     border:1px solid var(--border);
-    background:rgba(255,255,255,.82);
+    background: rgba(255,255,255,.78);
+    box-shadow: 0 28px 70px var(--shadow);
     backdrop-filter: blur(10px);
-    box-shadow:
-      0 28px 60px rgba(17,24,39,.18),
-      0 12px 26px rgba(249,115,22,.10);
-    display:grid;
-    grid-template-columns: 1.1fr .9fr;
+    position:relative;
     overflow:hidden;
     transform: translateZ(0);
-    animation: pop .55s ease both;
+    animation: pop .55s ease-out both;
   }
 
   @keyframes pop{
-    from{opacity:0; transform: translateY(16px) scale(.98)}
-    to{opacity:1; transform: translateY(0) scale(1)}
+    from{transform:translateY(10px) scale(.985); opacity:.0}
+    to{transform:translateY(0) scale(1); opacity:1}
+  }
+
+  .shine{
+    position:absolute; inset:-40%;
+    background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,.45) 45%, transparent 60%);
+    transform: rotate(12deg);
+    animation: shine 3.6s ease-in-out infinite;
+    pointer-events:none;
+  }
+  @keyframes shine{
+    0%{transform:translateX(-25%) rotate(12deg)}
+    50%{transform:translateX(25%) rotate(12deg)}
+    100%{transform:translateX(-25%) rotate(12deg)}
+  }
+
+  .header{
+    display:flex; align-items:center; gap:14px;
+    padding:22px 24px 12px 24px;
+  }
+  .logo{
+    width:56px; height:56px;
+    border-radius:16px;
+    border:1px solid var(--border);
+    background:#fff;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow: 0 14px 30px rgba(249,115,22,.18);
+  }
+  .logo img{width:44px;height:44px;object-fit:contain}
+  .title{
+    font-size:30px;
+    font-weight:900;
+    letter-spacing:.2px;
+  }
+  .sub{
+    margin-top:4px;
+    color:var(--muted);
+    font-size:14px;
+    font-weight:700;
+  }
+
+  .hr{height:1px;background:rgba(254,215,170,.9); margin:10px 24px 0 24px}
+
+  .content{
+    display:grid;
+    grid-template-columns: 1.1fr .9fr;
+    gap:18px;
+    padding:22px 24px;
   }
 
   .left{
-    padding:28px;
-    position:relative;
-    background:
-      linear-gradient(135deg, rgba(249,115,22,.20), rgba(251,146,60,.08)),
-      linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.75));
-  }
-
-  .logoRow{display:flex;align-items:center;gap:12px}
-  .logo{
-    width:58px;height:58px;border-radius:16px;
-    background:#fff;border:1px solid var(--border);
-    object-fit:contain;padding:8px;
-    box-shadow: 0 12px 22px rgba(249,115,22,.15);
-  }
-
-  .title{font-size:24px;font-weight:800;letter-spacing:.3px;margin:10px 0 6px}
-  .sub{font-size:13px;color:var(--muted);font-weight:700;line-height:1.5}
-
-  .floaty{
-    position:absolute;inset:auto 24px 24px 24px;
-    border-radius:18px;
+    border-radius:22px;
     border:1px solid var(--border);
-    background:rgba(255,255,255,.85);
-    padding:14px;
-    box-shadow: 0 18px 40px rgba(17,24,39,.10);
-    transform: perspective(900px) rotateX(3deg);
-    animation: breathe 3.2s ease-in-out infinite;
-  }
-  @keyframes breathe{
-    0%,100%{transform: perspective(900px) rotateX(3deg) translateY(0)}
-    50%{transform: perspective(900px) rotateX(3deg) translateY(-6px)}
+    background: rgba(255,255,255,.86);
+    padding:18px;
+    box-shadow: 0 18px 40px rgba(17,24,39,.08);
   }
 
-  .kpi{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
-  .pill{
-    padding:8px 10px;border-radius:999px;
-    border:1px solid var(--border);background:#fff;
-    font-size:12px;font-weight:800;color:#334155;
-    box-shadow: 0 10px 18px rgba(249,115,22,.10);
+  .bigNote{
+    font-size:16px; font-weight:900;
+    margin:0 0 10px 0;
+  }
+  .smallNote{
+    margin:0;
+    color:var(--muted);
+    font-weight:700;
+    line-height:1.5;
+    font-size:13px;
   }
 
   .right{
-    padding:28px;
-    display:flex;align-items:center;justify-content:center;
-    background: linear-gradient(180deg, rgba(255,255,255,.95), rgba(255,255,255,.80));
+    border-radius:22px;
+    border:1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.75));
+    padding:18px;
+    box-shadow: 0 18px 40px rgba(17,24,39,.08);
   }
 
-  form{
-    width:100%;
-    max-width:340px;
-    display:flex;
-    flex-direction:column;
-    gap:12px;
+  label{
+    display:block;
+    margin:10px 0 6px 0;
+    font-weight:900;
+    color:#374151;
+    font-size:13px;
   }
-  .h{font-size:18px;font-weight:800;margin-bottom:6px}
-  label{font-size:12px;font-weight:800;color:var(--muted)}
   input{
     width:100%;
     padding:12px 12px;
     border-radius:14px;
     border:1px solid var(--border);
     outline:none;
-    font-size:14px;
     font-family:"Times New Roman", Times, serif;
+    font-size:15px;
     background:#fff;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
-    transition: .15s ease;
+    box-shadow: inset 0 2px 0 rgba(0,0,0,.03);
   }
   input:focus{
-    border-color: rgba(249,115,22,.65);
-    box-shadow:
-      0 0 0 5px rgba(249,115,22,.18),
-      inset 0 1px 0 rgba(255,255,255,.9);
-    transform: translateY(-1px);
+    border-color: var(--orange2);
+    box-shadow: 0 0 0 4px rgba(249,115,22,.18);
   }
 
-  button{
-    padding:12px;
+  .btn{
+    margin-top:14px;
+    width:100%;
+    padding:12px 14px;
     border-radius:14px;
-    border:1px solid rgba(251,146,60,.9);
-    cursor:pointer;
-    font-weight:900;
-    letter-spacing:.3px;
-    color:white;
+    border:1px solid var(--orange2);
     background: linear-gradient(135deg, var(--orange), var(--orange2));
-    box-shadow: 0 18px 32px rgba(249,115,22,.26);
-    transition: .12s ease;
+    color:#fff;
+    font-weight:900;
+    cursor:pointer;
+    transition:.12s ease;
+    box-shadow: 0 18px 36px rgba(249,115,22,.25);
   }
-  button:hover{transform: translateY(-1px)}
-  button:active{transform: translateY(0)}
-  .err{
-    display:none;
-    padding:10px 12px;
-    border-radius:14px;
-    border:1px solid rgba(220,38,38,.25);
-    background: rgba(220,38,38,.06);
-    color:#b91c1c;
-    font-weight:800;
-    font-size:12px;
-  }
-  .foot{
+  .btn:hover{transform:translateY(-1px)}
+  .btn:active{transform:translateY(0px) scale(.99)}
+
+  .msg{
     margin-top:10px;
-    font-size:12px;
+    font-weight:900;
+    font-size:13px;
     color:var(--muted);
-    font-weight:800;
-    text-align:center;
+  }
+  .msg.bad{color:#dc2626}
+  .msg.ok{color:#16a34a}
+
+  .footer{
+    position:absolute;
+    left:0; right:0; bottom:0;
+    padding:14px 24px;
+    border-top:1px solid rgba(254,215,170,.9);
+    background: rgba(255,255,255,.75);
+    display:flex; justify-content:space-between; align-items:center;
+    font-size:13px; font-weight:900;
+    color:#374151;
+  }
+  .footer span{color:var(--muted); font-weight:900}
+  .powered b{color:#111827}
+
+  /* dashboard container */
+  #dashWrap{
+    display:none;
+    position:absolute;
+    inset:0;
+    background:#fff;
+  }
+  #dashFrame{
+    width:100%; height:100%;
+    border:0;
   }
 
-  @media (max-width: 860px){
-    .card{grid-template-columns: 1fr}
-    .left{display:none}
-    .right{padding:24px}
+  @media (max-width: 880px){
+    .content{grid-template-columns:1fr}
+    .card{min-height:640px}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
-    <div class="left">
-      <div class="logoRow">
-        <img class="logo" id="arcLogo" src="/arcadis.png" alt="Arcadis"
-          onerror="this.onerror=null; this.src='/image.png';"
-        />
+    <div class="shine"></div>
+
+    <div id="loginWrap">
+      <div class="header">
+        <div class="logo">
+          <img id="arcLogo" src="/arcadis.png" alt="Arcadis"
+            onerror="this.onerror=null; this.src='/image.png';" />
+        </div>
         <div>
           <div class="title">Display Health Monitor</div>
           <div class="sub">Operations Console • Secure Access</div>
         </div>
       </div>
 
-      <div class="kpi">
-        <div class="pill">Live device status</div>
-        <div class="pill">Map markers</div>
-        <div class="pill">Cloud messaging</div>
-        <div class="pill">Force signal control</div>
+      <div class="hr"></div>
+
+      <div class="content">
+        <div class="left">
+          <p class="bigNote">Access Control</p>
+          <p class="smallNote">
+            Login is required to view device status, map markers, and send cloud messages.
+            Refresh will always return to the login page.
+          </p>
+          <p class="smallNote" style="margin-top:10px">
+            Recommended: keep credentials private and share dashboard access only with authorized operators.
+          </p>
+        </div>
+
+        <div class="right">
+          <label>Username</label>
+          <input id="u" autocomplete="username" placeholder="admin" />
+
+          <label>Password</label>
+          <input id="p" type="password" autocomplete="current-password" placeholder="••••••••" />
+
+          <button class="btn" onclick="doLogin()">Login</button>
+          <div id="m" class="msg">Enter credentials to continue.</div>
+        </div>
       </div>
 
-      <div class="floaty">
-        <div style="font-weight:900;margin-bottom:6px">Powered by Arcadis</div>
-        <div style="font-size:12px;color:var(--muted);font-weight:800;line-height:1.45">
-          Login to access monitoring and messaging. This portal is intended for authorized operators only.
-        </div>
+      <div class="footer">
+        <div class="powered"><span>Powered by</span> <b>Arcadis</b></div>
+        <div><span>Theme:</span> Orange + White</div>
       </div>
     </div>
 
-    <div class="right">
-      <form id="loginForm" autocomplete="off">
-        <div class="h">Login</div>
-
-        <div>
-          <label>Username</label>
-          <input id="u" placeholder="admin" />
-        </div>
-
-        <div>
-          <label>Password</label>
-          <input id="p" type="password" placeholder="••••••••" />
-        </div>
-
-        <div class="err" id="errBox">Invalid credentials</div>
-
-        <button type="submit">Sign In</button>
-
-        <div class="foot">Orange + White Theme • Arcadis</div>
-      </form>
+    <div id="dashWrap">
+      <iframe id="dashFrame" src="about:blank"></iframe>
     </div>
   </div>
 </div>
 
 <script>
-  const form = document.getElementById("loginForm");
-  const err  = document.getElementById("errBox");
-  const u = document.getElementById("u");
-  const p = document.getElementById("p");
-
-  // Logo fallback chain
+  // logo fallback chain
   const img = document.getElementById("arcLogo");
   img.addEventListener("error", ()=>{
     if(img.src.endsWith("/arcadis.png")) img.src="/image.png";
     else if(img.src.endsWith("/image.png")) img.src="/logo.png";
   });
 
-  form.addEventListener("submit", async (e)=>{
-    e.preventDefault();
-    err.style.display = "none";
-
-    const payload = { username: u.value || "", password: p.value || "" };
+  async function doLogin(){
+    const u = document.getElementById("u").value.trim();
+    const p = document.getElementById("p").value;
+    const m = document.getElementById("m");
+    m.className = "msg";
+    m.textContent = "Checking...";
 
     try{
-      const r = await fetch("/auth/login", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(payload)
+      const r = await fetch("/api/login", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ username:u, password:p })
       });
+      const out = await r.json();
 
-      const out = await r.json().catch(()=> ({}));
       if(!r.ok || !out.ok){
-        err.textContent = out.error || "Invalid credentials";
-        err.style.display = "block";
+        m.className = "msg bad";
+        m.textContent = "Invalid login.";
         return;
       }
-      window.location.href = "/dashboard";
-    }catch(ex){
-      err.textContent = "Network error";
-      err.style.display = "block";
+
+      m.className = "msg ok";
+      m.textContent = "Login successful. Loading dashboard...";
+
+      // Load dashboard inside iframe using one-time token
+      const token = out.token;
+      document.getElementById("loginWrap").style.display = "none";
+      document.getElementById("dashWrap").style.display = "block";
+      document.getElementById("dashFrame").src = "/dashboard_embed?token=" + encodeURIComponent(token);
+
+    }catch(e){
+      m.className = "msg bad";
+      m.textContent = "Network error.";
     }
+  }
+
+  // Enter key submits
+  document.getElementById("p").addEventListener("keydown", (e)=>{
+    if(e.key === "Enter") doLogin();
   });
 </script>
 </body>
 </html>`);
 });
 
-app.post("/auth/login", (req, res) => {
-  try {
-    const { username, password } = req.body || {};
-    if (String(username || "") !== LOGIN_USER || String(password || "") !== LOGIN_PASS) {
-      return res.status(401).json({ ok: false, error: "Invalid credentials" });
-    }
-    const token = newToken();
-    sessions.set(token, { expiresAt: Date.now() + SESSION_TTL_MS });
+app.post("/api/login", (req, res) => {
+  cleanupTokens();
+  const { username, password } = req.body || {};
 
-    // If you deploy on HTTPS (Render), set secure=true
-    const secure = Boolean(process.env.COOKIE_SECURE === "1");
-    setCookie(res, "dhm_token", token, { secure });
-
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error" });
+  if (String(username || "") === ADMIN_USER && String(password || "") === ADMIN_PASS) {
+    const token = makeToken();
+    loginTokens.set(token, Date.now() + TOKEN_TTL_MS);
+    return res.json({ ok: true, token });
   }
+  return res.status(401).json({ ok: false });
 });
 
-app.post("/auth/logout", (req, res) => {
-  const t = getCookie(req, "dhm_token");
-  if (t) sessions.delete(t);
-  clearCookie(res, "dhm_token");
-  res.json({ ok: true });
-});
+// ======================
+// DASHBOARD EMBED (1-time token) ✅
+// ======================
+app.get("/dashboard_embed", (req, res) => {
+  cleanupTokens();
+  const token = String(req.query.token || "");
+  const exp = loginTokens.get(token);
 
-app.get("/logout", (req, res) => {
-  const t = getCookie(req, "dhm_token");
-  if (t) sessions.delete(t);
-  clearCookie(res, "dhm_token");
-  res.redirect("/login");
-});
+  if (!token || !exp || exp <= Date.now()) {
+    return res.redirect(302, "/login");
+  }
 
-// Protect the dashboard page (but keep API open for ESP)
-app.get("/dashboard", requireAuth, (req, res) => {
+  // one-time use => refresh goes back to login
+  loginTokens.delete(token);
+
   res.send(`<!doctype html>
 <html>
 <head>
@@ -523,171 +690,82 @@ app.get("/dashboard", requireAuth, (req, res) => {
     --border:#fed7aa;
     --muted:#6b7280;
   }
-
-  /* Subtle animated background */
-  body{
-    background:
-      radial-gradient(900px 500px at 20% 20%, rgba(249,115,22,.18), transparent 60%),
-      radial-gradient(700px 500px at 85% 35%, rgba(251,146,60,.14), transparent 55%),
-      linear-gradient(180deg, var(--bg), #ffffff);
+  .app{height:100%;display:flex;gap:12px;padding:12px;background:
+    radial-gradient(900px 500px at 12% 18%, rgba(249,115,22,.16), transparent 56%),
+    radial-gradient(700px 420px at 92% 28%, rgba(251,146,60,.14), transparent 58%),
+    linear-gradient(180deg, var(--bg), #ffffff);
   }
-
-  .app{height:100%;display:flex;gap:12px;padding:12px}
-
   .sidebar{
     width:260px;min-width:260px;
-    background:rgba(255,255,255,.88);
+    background:var(--card);
     border:1px solid var(--border);
-    border-radius:18px;
+    border-radius:16px;
     display:flex;flex-direction:column;
     padding:14px 12px;
-    backdrop-filter: blur(10px);
-    box-shadow:
-      0 26px 56px rgba(17,24,39,.16),
-      0 12px 24px rgba(249,115,22,.10);
-    animation: slideIn .45s ease both;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
-
-  @keyframes slideIn{
-    from{opacity:0; transform: translateX(-10px)}
-    to{opacity:1; transform: translateX(0)}
-  }
-
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
   .brand img{
     width:46px;height:46px;border-radius:12px;
     background:#fff;object-fit:contain;padding:6px;
-    border:1px solid var(--border);
-    box-shadow: 0 12px 22px rgba(249,115,22,.12);
+    border:1px solid var(--border)
   }
-  .brandTitle{font-size:16px;font-weight:800}
-  .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
+  .brandTitle{font-size:16px;font-weight:700}
+  .brandSub{font-size:12px;color:var(--muted);margin-top:2px}
   .divider{height:1px;background:var(--border);margin:8px 6px}
-
   .tabBtn{
     width:100%;
     padding:14px 14px;
-    border-radius:16px;
+    border-radius:14px;
     cursor:pointer;
     user-select:none;
     border:1px solid var(--border);
-    background:rgba(255,255,255,.92);
-    font-weight:900;
+    background:#fff;
+    font-weight:700;
     letter-spacing:.5px;
-    transition:.14s ease;
-    box-shadow:
-      0 10px 18px rgba(249,115,22,.07);
+    transition:.12s ease;
   }
   .tabBtn + .tabBtn{margin-top:10px}
-  .tabBtn:hover{transform:translateY(-2px)}
+  .tabBtn:hover{transform:translateY(-1px)}
   .tabBtn.active{
     background:linear-gradient(135deg, var(--orange), var(--orange2));
     color:#fff;
     border-color:var(--orange2);
-    box-shadow: 0 18px 34px rgba(249,115,22,.28);
+    box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-
-  .footer{
-    margin-top:auto;
-    padding:10px 10px 4px 10px;
-    font-size:12px;
-    color:var(--muted);
-    font-weight:900;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:10px;
-  }
-
-  .logoutBtn{
-    padding:8px 10px;
-    border-radius:12px;
-    border:1px solid var(--border);
-    background:#fff;
-    cursor:pointer;
-    font-weight:900;
-    font-family:"Times New Roman", Times, serif;
-    transition:.12s ease;
-    box-shadow: 0 10px 18px rgba(17,24,39,.06);
-  }
-  .logoutBtn:hover{transform: translateY(-1px)}
-
+  .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted)}
   .content{
     flex:1;display:flex;flex-direction:column;
-    background:rgba(255,255,255,.88);
+    background:var(--card);
     border:1px solid var(--border);
-    border-radius:18px;
+    border-radius:16px;
     overflow:hidden;
-    backdrop-filter: blur(10px);
-    box-shadow:
-      0 26px 56px rgba(17,24,39,.16),
-      0 12px 24px rgba(249,115,22,.10);
-    animation: fadeIn .45s ease both;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
-  @keyframes fadeIn{from{opacity:0; transform: translateY(8px)}to{opacity:1; transform: translateY(0)}}
-
   .cards{
     display:flex;gap:10px;padding:10px;
     border-bottom:1px solid var(--border);
-    background:rgba(255,255,255,.92);
-    flex-wrap:wrap;
+    background:#fff;flex-wrap:wrap;
   }
-  .card{
-    flex:0 0 240px;
-    border:1px solid var(--border);
-    border-radius:16px;
-    background:rgba(255,255,255,.95);
-    padding:10px 12px;
-    box-shadow:
-      0 14px 26px rgba(17,24,39,.08),
-      0 10px 18px rgba(249,115,22,.06);
-    transform: translateZ(0);
-    transition: .14s ease;
-  }
-  .card:hover{transform: translateY(-2px)}
-  .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
-  .card .v{font-size:22px;font-weight:900;margin-top:6px}
-
+  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px}
+  .card .k{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.6px}
+  .card .v{font-size:22px;font-weight:700;margin-top:6px}
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
-
   .pad{padding:12px}
-  .panel{
-    max-width:1050px;
-    border:1px solid var(--border);
-    border-radius:18px;
-    padding:14px;
-    background:rgba(255,255,255,.95);
-    box-shadow: 0 18px 34px rgba(17,24,39,.08);
-  }
-  .h1{font-weight:900;font-size:16px}
+  .panel{max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
+  .h1{font-weight:700;font-size:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-  .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
-
+  .lbl{font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px}
   input,select,button{
-    width:100%;padding:11px;border-radius:14px;border:1px solid var(--border);
+    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
     background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
-    transition:.12s ease;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
   }
-  input:focus,select:focus{
-    border-color: rgba(249,115,22,.65);
-    box-shadow: 0 0 0 5px rgba(249,115,22,.16);
-    transform: translateY(-1px);
-  }
-  button{
-    cursor:pointer;
-    background:linear-gradient(135deg, var(--orange), var(--orange2));
-    border-color:var(--orange2);
-    color:#fff;font-weight:900;
-    box-shadow: 0 18px 34px rgba(249,115,22,.28);
-  }
-  button:hover{transform: translateY(-1px)}
+  button{cursor:pointer;background:linear-gradient(135deg, var(--orange), var(--orange2));border-color:var(--orange2);color:#fff;font-weight:700}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
+  .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:700}
   .ok{color:#16a34a} .bad{color:#dc2626}
-
   @media (max-width: 980px){
     .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
@@ -709,10 +787,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
     <div class="divider"></div>
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
     <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
-    <div class="footer">
-      <span>Powered by <b>Arcadis</b></span>
-      <button class="logoutBtn" onclick="doLogout()">Logout</button>
-    </div>
+    <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
 
   <div class="content">
@@ -786,13 +861,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
-  }
-
-  async function doLogout(){
-    try{
-      await fetch("/auth/logout", { method:"POST" });
-    }catch(e){}
-    window.location.href = "/login";
   }
 
   const map = L.map('map').setView([17.3850,78.4867], 12);
@@ -961,151 +1029,6 @@ app.get("/dashboard", requireAuth, (req, res) => {
 </script>
 </body>
 </html>`);
-});
-
-// ======================
-// DEVICE REGISTER + HEARTBEAT (API kept OPEN for ESP)
-// ======================
-app.post("/register", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const now = Date.now();
-
-    const doc = await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $setOnInsert: { device_id },
-        $set: {
-          lat: typeof lat === "number" ? lat : 0,
-          lng: typeof lng === "number" ? lng : 0,
-          last_seen: now,
-          status: "online",
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureMsgRow(device_id);
-    res.json({ message: "Registered", device: doc });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-app.post("/heartbeat", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const now = Date.now();
-
-    await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $set: {
-          last_seen: now,
-          status: "online",
-          ...(typeof lat === "number" ? { lat } : {}),
-          ...(typeof lng === "number" ? { lng } : {}),
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureMsgRow(device_id);
-    res.json({ message: "OK" });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// DEVICES LIST
-// ======================
-app.get("/devices", async (req, res) => {
-  try {
-    const now = Date.now();
-    await Device.updateMany(
-      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
-      { $set: { status: "offline" } }
-    );
-
-    const data = await Device.find().sort({ last_seen: -1 });
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// CLOUD MESSAGE API
-// ======================
-app.post("/api/simple", async (req, res) => {
-  try {
-    const { device_id, force, sig, slot, line1, line2 } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const doc = await ensureMsgRow(device_id);
-    const now = Date.now();
-
-    const f = String(force || "");
-    if (!(f === "" || f === "red" || f === "amber" || f === "green")) {
-      return res.status(400).json({ error: "invalid force" });
-    }
-    doc.force = f;
-
-    const s = String(sig || "red");
-    if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
-
-    const sl = clampSlot(Number(slot || 0));
-    const l1 = String(line1 || "");
-    const l2 = String(line2 || "");
-
-    const packs = doc.packs || defaultPacks();
-    packs[s] = normalizePack(packs[s]);
-    packs[s][sl] = { l1, l2 };
-    doc.packs = packs;
-
-    const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
-    slotObj[s] = sl;
-    doc.slot = slotObj;
-
-    doc.v = Number(doc.v || 0) + 1;
-    doc.updated_at = now;
-
-    await doc.save();
-    res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-app.get("/api/pull/:device_id", async (req, res) => {
-  try {
-    const device_id = req.params.device_id;
-    const since = Number(req.query.since || 0);
-
-    const doc = await ensureMsgRow(device_id);
-    const v = Number(doc.v || 0);
-
-    if (since >= v) return res.json({ ok: true, changed: false, v });
-
-    res.json({
-      ok: true,
-      changed: true,
-      device_id,
-      v,
-      force: doc.force || "",
-      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
-      packs: doc.packs || defaultPacks(),
-      slots: MSG_SLOTS,
-      updated_at: doc.updated_at || 0,
-    });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
 });
 
 // ======================
