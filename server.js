@@ -2,8 +2,9 @@
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
 // ✅ Login page (ONLY logo + username + password + powered by)
 // ✅ No session persistence: Refresh always returns to login
-// ✅ Dashboard has Logout (top-right)
-// ✅ If device OFFLINE -> Send button shows ERROR (client) + server blocks /api/simple
+// ✅ Dashboard has Logout ICON (top-right)
+// ✅ Status text stays STATIC until next "Send" click (no auto-ready overwrite)
+// ✅ If device OFFLINE -> Send shows ERROR (client) + server blocks /api/simple
 
 const express = require("express");
 const cors = require("cors");
@@ -17,12 +18,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public")); // arcadis.png, image.png, logo.png
 
 // ======================
-// LOGIN (hardcoded as you asked)
+// LOGIN (hardcoded)
 // ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
-// token store (in-memory) -> NOT persisted. Refresh => token lost on client => back to login.
+// token store (in-memory)
 const TOKENS = new Map(); // token -> { exp }
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
@@ -114,7 +115,7 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-  force: { type: String, default: "" }, // "" | red | amber | green
+  force: { type: String, default("") }, // "" | red | amber | green
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
@@ -180,7 +181,7 @@ function isDeviceOnlineRow(dev) {
 }
 
 // ======================
-// AUTH MIDDLEWARE (only for dashboard + message send)
+// AUTH MIDDLEWARE (only for send)
 // ======================
 function requireAuth(req, res, next) {
   const token = req.headers["x-auth-token"];
@@ -194,7 +195,7 @@ function requireAuth(req, res, next) {
 app.get("/", (req, res) => res.send("Server Running ✅"));
 
 // ======================
-// LOGIN PAGES
+// LOGIN PAGE
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
@@ -263,9 +264,7 @@ app.get("/login", (req, res) => {
   }
   button:hover{transform:translateY(-1px)}
   .err{margin-top:10px;color:#dc2626;font-weight:800;font-size:13px;min-height:18px}
-  .footer{
-    margin-top:14px;color:var(--muted);font-size:12px;font-weight:800
-  }
+  .footer{margin-top:14px;color:var(--muted);font-size:12px;font-weight:800}
 </style>
 </head>
 <body>
@@ -299,7 +298,6 @@ app.get("/login", (req, res) => {
 </div>
 
 <script>
-  // ALWAYS show login on refresh: we do NOT store token in localStorage/cookies.
   const form = document.getElementById("loginForm");
   const err  = document.getElementById("err");
 
@@ -323,7 +321,6 @@ app.get("/login", (req, res) => {
         return;
       }
 
-      // Server returns the dashboard HTML (with a temporary token injected into JS memory).
       const html = await r.text();
       document.open();
       document.write(html);
@@ -337,7 +334,7 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// POST /login -> returns dashboard HTML with in-memory token injected
+// POST /login -> returns dashboard HTML with token injected
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
@@ -347,10 +344,8 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// GET /dashboard always goes back to login (because token is not persisted)
-app.get("/dashboard", (req, res) => {
-  return res.redirect("/login");
-});
+// GET /dashboard always back to login (no persistence)
+app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // DEVICE REGISTER + HEARTBEAT
@@ -430,13 +425,11 @@ app.get("/devices", async (req, res) => {
 // ======================
 // CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
 // ======================
-// POST /api/simple  {device_id, force, sig, slot, line1, line2}
 app.post("/api/simple", requireAuth, async (req, res) => {
   try {
     const { device_id, force, sig, slot, line1, line2 } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
-    // block offline device
     const dev = await Device.findOne({ device_id });
     if (!isDeviceOnlineRow(dev)) {
       return res.status(400).json({
@@ -479,7 +472,7 @@ app.post("/api/simple", requireAuth, async (req, res) => {
   }
 });
 
-// ESP pulls: GET /api/pull/:device_id?since=v   (no auth for ESP)
+// ESP pulls (no auth)
 app.get("/api/pull/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -507,7 +500,9 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD HTML RENDER (token lives only in JS memory)
+// DASHBOARD HTML RENDER
+// ✅ Logout ICON top-right
+// ✅ Status is NOT overwritten by device refresh
 // ======================
 function renderDashboardHTML(TOKEN) {
   return `<!doctype html>
@@ -559,32 +554,33 @@ function renderDashboardHTML(TOKEN) {
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
+
   .content{
     flex:1;display:flex;flex-direction:column;background:var(--card);
     border:1px solid var(--border);border-radius:16px;overflow:hidden;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
     position:relative;
   }
-  /* Top right logout */
-  .topbar{
-    height:54px;display:flex;align-items:center;justify-content:flex-end;
-    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
-  }
-  .logoutBtn{
+
+  /* Logout ICON top-right */
+  .logoutIcon{
+    position:absolute;top:12px;right:12px;
+    width:44px;height:44px;border-radius:14px;
     border:1px solid var(--border);
-    background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;
-    font-weight:900;
-    border-radius:14px;
-    padding:10px 14px;
+    background:#fff;
+    display:flex;align-items:center;justify-content:center;
     cursor:pointer;
-    box-shadow:0 12px 22px rgba(249,115,22,.22);
+    box-shadow:0 12px 22px rgba(17,24,39,.10);
     transition:.12s ease;
+    z-index:10;
   }
-  .logoutBtn:hover{transform:translateY(-1px)}
+  .logoutIcon:hover{transform:translateY(-1px)}
+  .logoutIcon svg{width:22px;height:22px;fill:var(--orange)}
+
   .cards{
     display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
     background:#fff;flex-wrap:wrap;
+    padding-right:70px; /* space for logout icon */
   }
   .card{
     flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;
@@ -592,9 +588,11 @@ function renderDashboardHTML(TOKEN) {
   }
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
+
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
+
   .pad{padding:12px}
   .panel{
     max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
@@ -612,9 +610,11 @@ function renderDashboardHTML(TOKEN) {
     border-color:var(--orange2);color:#fff;font-weight:900;
   }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
+
   @media (max-width: 980px){
     .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
@@ -640,8 +640,11 @@ function renderDashboardHTML(TOKEN) {
   </div>
 
   <div class="content">
-    <div class="topbar">
-      <button class="logoutBtn" onclick="logout()">Logout</button>
+    <!-- Logout icon -->
+    <div class="logoutIcon" onclick="logout()" title="Logout">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 17l1.41-1.41L8.83 13H21v-2H8.83l2.58-2.59L10 7l-7 7 7 7z"></path>
+      </svg>
     </div>
 
     <div class="cards">
@@ -699,6 +702,7 @@ function renderDashboardHTML(TOKEN) {
             <button class="sendBtn" onclick="sendToESP()">Send to ESP</button>
           </div>
 
+          <!-- ✅ default ready shown; will NOT change unless you click Send -->
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
         </div>
       </div>
@@ -711,11 +715,10 @@ function renderDashboardHTML(TOKEN) {
   // token exists ONLY in JS memory (refresh => lost => login again)
   const AUTH_TOKEN = "${TOKEN}";
 
-  // set URL to /dashboard (no token in URL). Refresh will go /dashboard -> server redirects to login.
+  // refresh -> /dashboard -> server redirects /login
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
 
   function logout(){
-    // no persistence. just go to login.
     window.location.href = "/login";
   }
 
@@ -765,8 +768,9 @@ function renderDashboardHTML(TOKEN) {
   const forceSel = document.getElementById("forceSel");
   const statusTxt = document.getElementById("statusTxt");
 
-  let DEVICE_CACHE = []; // keep status here
+  let DEVICE_CACHE = [];
 
+  // ✅ Status stays until NEXT Send click (we DO NOT set "Ready" inside loadDevices)
   function setStatus(text, ok){
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
@@ -843,9 +847,9 @@ function renderDashboardHTML(TOKEN) {
       });
       if(cur) devSel.value = cur;
 
-      setStatus("Ready", true);
+      // ✅ DO NOT setStatus("Ready") here (keeps last Send result)
     }catch(e){
-      setStatus("Network error", false);
+      // also don't overwrite last status automatically
     }
   }
 
