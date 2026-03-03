@@ -1,9 +1,11 @@
-// server.js ✅ FULL (NO ERRORS)
+// server.js ✅ FULL WORKING (NO RENDER ERRORS)
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
 // ✅ Login page (logo + username + password + powered by)
-// ✅ No session persistence: Refresh always returns to login
+// ✅ Prevent browser autofill showing username/password before typing
+// ✅ No session persistence: refresh -> login
 // ✅ Dashboard has Logout ICON (top-right)
-// ✅ If device OFFLINE -> Send button shows ERROR (client) + server blocks /api/simple
+// ✅ Status is STATIC (changes ONLY when you click Send)
+// ✅ If device OFFLINE -> client shows error + server blocks /api/simple
 
 const express = require("express");
 const cors = require("cors");
@@ -14,7 +16,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static("public")); // public/arcadis.png, public/image.png, public/logo.png
+app.use(express.static("public")); // public/arcadis.png, image.png, logo.png
 
 // ======================
 // LOGIN (hardcoded)
@@ -22,7 +24,7 @@ app.use(express.static("public")); // public/arcadis.png, public/image.png, publ
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
-// token store (in-memory) -> NOT persisted. Refresh => token lost => back to login.
+// token store (in-memory)
 const TOKENS = new Map(); // token -> { exp }
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
@@ -95,7 +97,7 @@ function defaultPacks() {
       ["CALM THE ACCELERATOR.", "HOME IS THE GOAL."],
     ]),
     green: pack([
-      ["GO - BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
+      ["GO — BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
       ["MOVE SMART.", "DON'T RACE."],
       ["EYES UP.", "PHONE DOWN."],
       ["SMOOTH DRIVE.", "SAFE ARRIVAL."],
@@ -113,24 +115,19 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-
-  // "" | red | amber | green
-  force: { type: String, default: "" },
-
+  force: { type: String, default: "" }, // "" | red | amber | green
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
     green: { type: Number, default: 0 },
     no: { type: Number, default: 0 },
   },
-
   packs: {
     red: { type: Array, default: () => defaultPacks().red },
     amber: { type: Array, default: () => defaultPacks().amber },
     green: { type: Array, default: () => defaultPacks().green },
     no: { type: Array, default: () => defaultPacks().no },
   },
-
   v: { type: Number, default: 0 },
   updated_at: { type: Number, default: 0 },
 });
@@ -195,10 +192,10 @@ function requireAuth(req, res, next) {
 // ======================
 // HOME
 // ======================
-app.get("/", (req, res) => res.send("Server Running ✅"));
+app.get("/", (req, res) => res.redirect("/login"));
 
 // ======================
-// LOGIN PAGE
+// LOGIN (GET)
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
@@ -235,7 +232,11 @@ app.get("/login", (req, res) => {
     pointer-events:none;
     animation:floaty 6s ease-in-out infinite;
   }
-  @keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(10px)}100%{transform:translateY(0)}}
+  @keyframes floaty{
+    0%{transform:translateY(0)}
+    50%{transform:translateY(10px)}
+    100%{transform:translateY(0)}
+  }
   .top{display:flex;align-items:center;gap:12px;position:relative}
   .logo{
     width:56px;height:56px;border-radius:14px;
@@ -244,28 +245,19 @@ app.get("/login", (req, res) => {
   }
   h1{margin:0;font-size:22px;font-weight:800}
   .sub{margin-top:4px;color:var(--muted);font-size:13px;font-weight:700}
-  form{margin-top:16px}
+  form{margin-top:16px;position:relative}
+  label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
   input{
-    width:100%;
-    padding:12px 12px;
-    border-radius:14px;
-    border:1px solid var(--border);
-    background:#fff;
-    font-family:"Times New Roman", Times, serif;
-    font-size:15px;
+    width:100%;padding:12px 12px;border-radius:14px;
+    border:1px solid var(--border);background:#fff;
+    font-family:"Times New Roman", Times, serif;font-size:15px;
     outline:none;
-    margin-top:10px;
   }
   button{
-    width:100%;
-    margin-top:14px;
-    padding:12px;
-    border-radius:14px;
+    width:100%;margin-top:14px;padding:12px;border-radius:14px;
     border:1px solid var(--orange2);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;
-    font-weight:900;
-    font-size:15px;
+    color:#fff;font-weight:900;font-size:15px;
     cursor:pointer;
     box-shadow:0 14px 26px rgba(249,115,22,.25);
     transition:.12s ease;
@@ -290,9 +282,17 @@ app.get("/login", (req, res) => {
       </div>
     </div>
 
-    <form id="loginForm">
-      <input id="u" autocomplete="username" placeholder="Username" required />
-      <input id="p" type="password" autocomplete="current-password" placeholder="Password" required />
+    <form id="loginForm" autocomplete="off">
+      <!-- fake inputs to absorb autofill -->
+      <input type="text" name="fakeuser" autocomplete="username" style="display:none" />
+      <input type="password" name="fakepass" autocomplete="new-password" style="display:none" />
+
+      <label>Username</label>
+      <input id="u" name="username_real" autocomplete="off" placeholder="Username" required />
+
+      <label>Password</label>
+      <input id="p" name="password_real" type="password" autocomplete="new-password" placeholder="Password" required />
+
       <button type="submit">Login</button>
       <div class="err" id="err"></div>
     </form>
@@ -302,9 +302,17 @@ app.get("/login", (req, res) => {
 </div>
 
 <script>
-  // no token stored => refresh always shows login
+  // no localStorage/cookies token -> refresh always shows login
   const form = document.getElementById("loginForm");
   const err  = document.getElementById("err");
+
+  // extra hard block for autofill
+  window.addEventListener("load", ()=>{
+    try{
+      document.getElementById("u").value = "";
+      document.getElementById("p").value = "";
+    }catch(e){}
+  });
 
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
@@ -326,9 +334,10 @@ app.get("/login", (req, res) => {
         return;
       }
 
-      // server returns dashboard HTML with token injected (JS memory only)
       const html = await r.text();
-      document.open(); document.write(html); document.close();
+      document.open();
+      document.write(html);
+      document.close();
     }catch(e){
       err.textContent = "Network error";
     }
@@ -338,7 +347,9 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// POST /login -> returns dashboard HTML with in-memory token injected
+// ======================
+// LOGIN (POST) -> return dashboard HTML with token injected
+// ======================
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
@@ -348,7 +359,7 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// GET /dashboard always goes back to login (refresh behavior)
+// refresh /dashboard -> go login
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
@@ -360,7 +371,6 @@ app.post("/register", async (req, res) => {
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-
     const doc = await Device.findOneAndUpdate(
       { device_id },
       {
@@ -388,7 +398,6 @@ app.post("/heartbeat", async (req, res) => {
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-
     await Device.findOneAndUpdate(
       { device_id },
       {
@@ -476,7 +485,7 @@ app.post("/api/simple", requireAuth, async (req, res) => {
   }
 });
 
-// ESP pulls (no auth)
+// ESP pull (no auth)
 app.get("/api/pull/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -564,27 +573,26 @@ function renderDashboardHTML(TOKEN) {
     position:relative;
   }
 
-  /* Logout ICON (top-right) */
-  .logoutIcon{
-    position:absolute;
-    top:10px;
-    right:12px;
-    width:44px;height:44px;
-    border-radius:14px;
+  /* Top bar + logout icon button */
+  .topbar{
+    height:54px;display:flex;align-items:center;justify-content:flex-end;
+    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
+  }
+  .iconBtn{
+    width:42px;height:42px;border-radius:14px;
+    display:flex;align-items:center;justify-content:center;
     border:1px solid var(--border);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    display:flex;align-items:center;justify-content:center;
-    cursor:pointer;
     box-shadow:0 12px 22px rgba(249,115,22,.22);
-    z-index:10;
+    cursor:pointer;
+    transition:.12s ease;
   }
-  .logoutIcon:hover{transform:translateY(-1px)}
-  .logoutIcon svg{width:22px;height:22px;fill:#fff}
+  .iconBtn:hover{transform:translateY(-1px)}
+  .iconBtn svg{width:20px;height:20px;fill:#fff}
 
   .cards{
     display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
     background:#fff;flex-wrap:wrap;
-    padding-right:70px; /* space for logout icon */
   }
   .card{
     flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;
@@ -592,11 +600,9 @@ function renderDashboardHTML(TOKEN) {
   }
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
-
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
-
   .pad{padding:12px}
   .panel{
     max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
@@ -617,7 +623,6 @@ function renderDashboardHTML(TOKEN) {
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
-
   @media (max-width: 980px){
     .sidebar{width:220px;min-width:220px}
     .card{flex:1 1 160px}
@@ -643,10 +648,14 @@ function renderDashboardHTML(TOKEN) {
   </div>
 
   <div class="content">
-    <div class="logoutIcon" title="Logout" onclick="logout()">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M10 17v-2h4v-6h-4V7l-5 5 5 5zm9-14H12c-1.1 0-2 .9-2 2v3h2V5h7v14h-7v-3h-2v3c0 1.1.9 2 2 2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
-      </svg>
+    <div class="topbar">
+      <button class="iconBtn" onclick="logout()" title="Logout" aria-label="Logout">
+        <!-- logout icon -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M10 17l1.41-1.41L8.83 13H20v-2H8.83l2.58-2.59L10 7l-5 5 5 5z"></path>
+          <path d="M4 4h8V2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h8v-2H4V4z"></path>
+        </svg>
+      </button>
     </div>
 
     <div class="cards">
@@ -704,7 +713,7 @@ function renderDashboardHTML(TOKEN) {
             <button class="sendBtn" onclick="sendToESP()">Send to ESP</button>
           </div>
 
-          <!-- ✅ stays until next Send click (we won't overwrite it in refresh loop) -->
+          <!-- STATIC STATUS: changes ONLY on Send -->
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
         </div>
       </div>
@@ -715,11 +724,11 @@ function renderDashboardHTML(TOKEN) {
 
 <script>
   const AUTH_TOKEN = "${TOKEN}";
-
-  // Refresh should go back to login (server redirects /dashboard -> /login)
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
 
-  function logout(){ window.location.href = "/login"; }
+  function logout(){
+    window.location.href = "/login";
+  }
 
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
@@ -727,6 +736,7 @@ function renderDashboardHTML(TOKEN) {
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
+    // ✅ DO NOT TOUCH STATUS HERE
   }
 
   const map = L.map('map').setView([17.3850,78.4867], 12);
@@ -737,8 +747,7 @@ function renderDashboardHTML(TOKEN) {
 
   const markers = new Map();
   function pinIcon(status){
-    const isOn = (status === "online");
-    const fill = isOn ? "#16a34a" : "#dc2626";
+    const fill = (status === "online") ? "#16a34a" : "#dc2626";
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
         <svg width="28" height="28" viewBox="0 0 64 64">
@@ -769,10 +778,11 @@ function renderDashboardHTML(TOKEN) {
 
   let DEVICE_CACHE = [];
 
-  // ✅ IMPORTANT:
-  // We do NOT set "Ready" inside the auto-refresh loop,
-  // so your status stays until the NEXT Send click.
+  // ✅ STATUS LOCK: only changes when Send is clicked
+  let STATUS_LOCKED = false;
+
   function setStatus(text, ok){
+    STATUS_LOCKED = true;
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
 
@@ -848,9 +858,12 @@ function renderDashboardHTML(TOKEN) {
       });
       if(cur) devSel.value = cur;
 
+      // ✅ DO NOT set status here (keeps it static)
     }catch(e){
-      // only set status on real errors, not every refresh
-      setStatus("Network error", false);
+      if(!STATUS_LOCKED){
+        // only show this if user never pressed send
+        statusTxt.innerHTML = "Status: Network issue <span class='bad'>✗</span>";
+      }
     }
   }
 
@@ -860,6 +873,9 @@ function renderDashboardHTML(TOKEN) {
   }
 
   async function sendToESP(){
+    // user clicked Send -> allow new status updates
+    STATUS_LOCKED = false;
+
     const device_id = devSel.value;
     if(!device_id){
       setStatus("No device selected", false);
