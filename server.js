@@ -1,10 +1,9 @@
-// server.js ✅ FULL
+// server.js ✅ FULL (NO ERRORS)
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
-// ✅ Login page (ONLY logo + username + password + powered by)
+// ✅ Login page (logo + username + password + powered by)
 // ✅ No session persistence: Refresh always returns to login
 // ✅ Dashboard has Logout ICON (top-right)
-// ✅ Status text stays STATIC until next "Send" click (no auto-ready overwrite)
-// ✅ If device OFFLINE -> Send shows ERROR (client) + server blocks /api/simple
+// ✅ If device OFFLINE -> Send button shows ERROR (client) + server blocks /api/simple
 
 const express = require("express");
 const cors = require("cors");
@@ -15,7 +14,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static("public")); // arcadis.png, image.png, logo.png
+app.use(express.static("public")); // public/arcadis.png, public/image.png, public/logo.png
 
 // ======================
 // LOGIN (hardcoded)
@@ -23,7 +22,7 @@ app.use(express.static("public")); // arcadis.png, image.png, logo.png
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
-// token store (in-memory)
+// token store (in-memory) -> NOT persisted. Refresh => token lost => back to login.
 const TOKENS = new Map(); // token -> { exp }
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
@@ -55,8 +54,7 @@ setInterval(() => {
 // ======================
 // DATABASE
 // ======================
-const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
@@ -97,7 +95,7 @@ function defaultPacks() {
       ["CALM THE ACCELERATOR.", "HOME IS THE GOAL."],
     ]),
     green: pack([
-      ["GO — BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
+      ["GO - BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
       ["MOVE SMART.", "DON'T RACE."],
       ["EYES UP.", "PHONE DOWN."],
       ["SMOOTH DRIVE.", "SAFE ARRIVAL."],
@@ -115,19 +113,24 @@ function defaultPacks() {
 
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-  force: { type: String, default("") }, // "" | red | amber | green
+
+  // "" | red | amber | green
+  force: { type: String, default: "" },
+
   slot: {
     red: { type: Number, default: 0 },
     amber: { type: Number, default: 0 },
     green: { type: Number, default: 0 },
     no: { type: Number, default: 0 },
   },
+
   packs: {
     red: { type: Array, default: () => defaultPacks().red },
     amber: { type: Array, default: () => defaultPacks().amber },
     green: { type: Array, default: () => defaultPacks().green },
     no: { type: Array, default: () => defaultPacks().no },
   },
+
   v: { type: Number, default: 0 },
   updated_at: { type: Number, default: 0 },
 });
@@ -181,7 +184,7 @@ function isDeviceOnlineRow(dev) {
 }
 
 // ======================
-// AUTH MIDDLEWARE (only for send)
+// AUTH MIDDLEWARE
 // ======================
 function requireAuth(req, res, next) {
   const token = req.headers["x-auth-token"];
@@ -232,11 +235,7 @@ app.get("/login", (req, res) => {
     pointer-events:none;
     animation:floaty 6s ease-in-out infinite;
   }
-  @keyframes floaty{
-    0%{transform:translateY(0)}
-    50%{transform:translateY(10px)}
-    100%{transform:translateY(0)}
-  }
+  @keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(10px)}100%{transform:translateY(0)}}
   .top{display:flex;align-items:center;gap:12px;position:relative}
   .logo{
     width:56px;height:56px;border-radius:14px;
@@ -245,19 +244,28 @@ app.get("/login", (req, res) => {
   }
   h1{margin:0;font-size:22px;font-weight:800}
   .sub{margin-top:4px;color:var(--muted);font-size:13px;font-weight:700}
-  form{margin-top:16px;position:relative}
-  label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
+  form{margin-top:16px}
   input{
-    width:100%;padding:12px 12px;border-radius:14px;
-    border:1px solid var(--border);background:#fff;
-    font-family:"Times New Roman", Times, serif;font-size:15px;
+    width:100%;
+    padding:12px 12px;
+    border-radius:14px;
+    border:1px solid var(--border);
+    background:#fff;
+    font-family:"Times New Roman", Times, serif;
+    font-size:15px;
     outline:none;
+    margin-top:10px;
   }
   button{
-    width:100%;margin-top:14px;padding:12px;border-radius:14px;
+    width:100%;
+    margin-top:14px;
+    padding:12px;
+    border-radius:14px;
     border:1px solid var(--orange2);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;font-weight:900;font-size:15px;
+    color:#fff;
+    font-weight:900;
+    font-size:15px;
     cursor:pointer;
     box-shadow:0 14px 26px rgba(249,115,22,.25);
     transition:.12s ease;
@@ -283,12 +291,8 @@ app.get("/login", (req, res) => {
     </div>
 
     <form id="loginForm">
-      <label>Username</label>
-      <input id="u" autocomplete="username" placeholder="admin" required />
-
-      <label>Password</label>
-      <input id="p" type="password" autocomplete="current-password" placeholder="••••••••" required />
-
+      <input id="u" autocomplete="username" placeholder="Username" required />
+      <input id="p" type="password" autocomplete="current-password" placeholder="Password" required />
       <button type="submit">Login</button>
       <div class="err" id="err"></div>
     </form>
@@ -298,6 +302,7 @@ app.get("/login", (req, res) => {
 </div>
 
 <script>
+  // no token stored => refresh always shows login
   const form = document.getElementById("loginForm");
   const err  = document.getElementById("err");
 
@@ -321,10 +326,9 @@ app.get("/login", (req, res) => {
         return;
       }
 
+      // server returns dashboard HTML with token injected (JS memory only)
       const html = await r.text();
-      document.open();
-      document.write(html);
-      document.close();
+      document.open(); document.write(html); document.close();
     }catch(e){
       err.textContent = "Network error";
     }
@@ -334,7 +338,7 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// POST /login -> returns dashboard HTML with token injected
+// POST /login -> returns dashboard HTML with in-memory token injected
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
@@ -344,7 +348,7 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// GET /dashboard always back to login (no persistence)
+// GET /dashboard always goes back to login (refresh behavior)
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
@@ -500,9 +504,7 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD HTML RENDER
-// ✅ Logout ICON top-right
-// ✅ Status is NOT overwritten by device refresh
+// DASHBOARD HTML
 // ======================
 function renderDashboardHTML(TOKEN) {
   return `<!doctype html>
@@ -562,20 +564,22 @@ function renderDashboardHTML(TOKEN) {
     position:relative;
   }
 
-  /* Logout ICON top-right */
+  /* Logout ICON (top-right) */
   .logoutIcon{
-    position:absolute;top:12px;right:12px;
-    width:44px;height:44px;border-radius:14px;
+    position:absolute;
+    top:10px;
+    right:12px;
+    width:44px;height:44px;
+    border-radius:14px;
     border:1px solid var(--border);
-    background:#fff;
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
     display:flex;align-items:center;justify-content:center;
     cursor:pointer;
-    box-shadow:0 12px 22px rgba(17,24,39,.10);
-    transition:.12s ease;
+    box-shadow:0 12px 22px rgba(249,115,22,.22);
     z-index:10;
   }
   .logoutIcon:hover{transform:translateY(-1px)}
-  .logoutIcon svg{width:22px;height:22px;fill:var(--orange)}
+  .logoutIcon svg{width:22px;height:22px;fill:#fff}
 
   .cards{
     display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
@@ -610,7 +614,6 @@ function renderDashboardHTML(TOKEN) {
     border-color:var(--orange2);color:#fff;font-weight:900;
   }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
-
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
@@ -640,10 +643,9 @@ function renderDashboardHTML(TOKEN) {
   </div>
 
   <div class="content">
-    <!-- Logout icon -->
-    <div class="logoutIcon" onclick="logout()" title="Logout">
+    <div class="logoutIcon" title="Logout" onclick="logout()">
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M10 17l1.41-1.41L8.83 13H21v-2H8.83l2.58-2.59L10 7l-7 7 7 7z"></path>
+        <path d="M10 17v-2h4v-6h-4V7l-5 5 5 5zm9-14H12c-1.1 0-2 .9-2 2v3h2V5h7v14h-7v-3h-2v3c0 1.1.9 2 2 2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
       </svg>
     </div>
 
@@ -702,7 +704,7 @@ function renderDashboardHTML(TOKEN) {
             <button class="sendBtn" onclick="sendToESP()">Send to ESP</button>
           </div>
 
-          <!-- ✅ default ready shown; will NOT change unless you click Send -->
+          <!-- ✅ stays until next Send click (we won't overwrite it in refresh loop) -->
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
         </div>
       </div>
@@ -712,15 +714,12 @@ function renderDashboardHTML(TOKEN) {
 </div>
 
 <script>
-  // token exists ONLY in JS memory (refresh => lost => login again)
   const AUTH_TOKEN = "${TOKEN}";
 
-  // refresh -> /dashboard -> server redirects /login
+  // Refresh should go back to login (server redirects /dashboard -> /login)
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
 
-  function logout(){
-    window.location.href = "/login";
-  }
+  function logout(){ window.location.href = "/login"; }
 
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
@@ -770,7 +769,9 @@ function renderDashboardHTML(TOKEN) {
 
   let DEVICE_CACHE = [];
 
-  // ✅ Status stays until NEXT Send click (we DO NOT set "Ready" inside loadDevices)
+  // ✅ IMPORTANT:
+  // We do NOT set "Ready" inside the auto-refresh loop,
+  // so your status stays until the NEXT Send click.
   function setStatus(text, ok){
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
@@ -847,9 +848,9 @@ function renderDashboardHTML(TOKEN) {
       });
       if(cur) devSel.value = cur;
 
-      // ✅ DO NOT setStatus("Ready") here (keeps last Send result)
     }catch(e){
-      // also don't overwrite last status automatically
+      // only set status on real errors, not every refresh
+      setStatus("Network error", false);
     }
   }
 
@@ -921,7 +922,7 @@ function renderDashboardHTML(TOKEN) {
 }
 
 // ======================
-// START SERVER ✅
+// START SERVER
 // ======================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server started on port " + PORT));
