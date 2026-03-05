@@ -1,3 +1,5 @@
+// server.js ✅ FULL WORKING (NO RENDER ERRORS)
+
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -9,9 +11,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
-// ======================
-// LOGIN
-// ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
@@ -39,342 +38,273 @@ function isValidToken(t) {
   return true;
 }
 
-// ======================
-// DATABASE
-// ======================
-mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor")
-.then(()=>console.log("MongoDB Connected"))
-.catch(e=>console.log("DB Error",e));
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, row] of TOKENS.entries()) {
+    if (now > row.exp) TOKENS.delete(t);
+  }
+}, 60000);
 
-// ======================
-// DEVICE MODEL
-// ======================
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+
+mongoose
+  .connect(MONGO_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch((err) => console.log("DB Error:", err?.message || err));
+
+const OFFLINE_AFTER_MS = 30000;
+const MSG_SLOTS = 5;
+
 const deviceSchema = new mongoose.Schema({
-  device_id:String,
-  lat:Number,
-  lng:Number,
-  last_seen:Number,
-  status:String
+  device_id: { type: String, unique: true, required: true },
+  lat: { type: Number, default: 0 },
+  lng: { type: Number, default: 0 },
+  last_seen: { type: Number, default: 0 },
+  status: { type: String, default: "offline" },
 });
 
-const Device = mongoose.model("Device",deviceSchema);
+function defaultPacks() {
+  const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
 
-// ======================
-// LOGIN PAGE
-// ======================
-app.get("/login",(req,res)=>{
-res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<title>Login</title>
-</head>
-<body style="font-family:Times New Roman">
-<h2>Display Monitor Login</h2>
+  return {
+    red: pack([
+      ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
+      ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
+      ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
+      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE’S FUTURE"],
+      ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"],
+    ]),
+    amber: pack([
+      ["EASE OFF THE PEDAL NOW", "A CALM SLOWDOWN KEEPS EVERYONE SAFE"],
+      ["NO NEED TO RUSH THE JUNCTION", "A SECOND OF PATIENCE SAVES A LIFE"],
+      ["SLOW AND WATCH THE ROAD AHEAD", "CONTROL TODAY PREVENTS COLLISION"],
+      ["LET THE SPEED DROP GENTLY", "SMOOTH BRAKING SAVES FUEL TOO"],
+      ["PAUSE YOUR HURRY AT THE CROSSING", "SAFE STREETS START WITH PATIENCE"],
+    ]),
+    green: pack([
+      [
+        "SLOW DRIVING SAVES FUEL AND SAVES LIVES",
+        "SMART SPEED PROTECTS PEOPLE AND PLANET",
+      ],
+      [
+        "CALM DRIVING REDUCES ACCIDENTS AND POLLUTION",
+        "RESPONSIBLE SPEED CREATES HEALTHY CITIES",
+      ],
+      ["GLIDE FORWARD WITH A SAFE GAP", "SPACE ON THE ROAD PREVENTS CRASHES"],
+      ["SPEED THRILLS BUT SAFETY SAVES", "SAFE DRIVING IS SMART DRIVING"],
+      ["MOVE AHEAD WITH CARE AND CONTROL", "ARRIVE SAFE EVERY TIME"],
+    ]),
+    no: pack([
+      ["WHEN SIGNALS FAIL DISCIPLINE MUST NOT", "CONTROL YOUR SPEED"],
+      ["FAST DRIVING AT JUNCTIONS INVITES ACCIDENTS", "SLOW DOWN AND STAY ALERT"],
+      ["WITHOUT SIGNALS SAFETY DEPENDS ON YOU", "DRIVE WITH PATIENCE"],
+      ["DISCIPLINED DRIVERS CREATE SAFE ROADS", "FOLLOW TRAFFIC RULES"],
+      ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"],
+    ]),
+  };
+}
+
+const cloudMsgSchema = new mongoose.Schema({
+  device_id: { type: String, unique: true, required: true },
+  force: { type: String, default: "" },
+  slot: {
+    red: { type: Number, default: 0 },
+    amber: { type: Number, default: 0 },
+    green: { type: Number, default: 0 },
+    no: { type: Number, default: 0 },
+  },
+  packs: {
+    red: { type: Array, default: () => defaultPacks().red },
+    amber: { type: Array, default: () => defaultPacks().amber },
+    green: { type: Array, default: () => defaultPacks().green },
+    no: { type: Array, default: () => defaultPacks().no },
+  },
+  v: { type: Number, default: 0 },
+  updated_at: { type: Number, default: 0 },
+});
+
+const Device = mongoose.model("Device", deviceSchema);
+const CloudMsg = mongoose.model("CloudMsg", cloudMsgSchema);
+
+function requireAuth(req, res, next) {
+  const token = req.headers["x-auth-token"];
+  if (isValidToken(token)) return next();
+  return res.status(401).json({ error: "Unauthorized" });
+}
+
+app.get("/", (req, res) => res.redirect("/login"));
+
+app.get("/login", (req, res) => {
+  res.send(`<html><body><h2>Login</h2>
 <form method="POST" action="/login">
-<input name="username" placeholder="username"/><br><br>
-<input name="password" type="password" placeholder="password"/><br><br>
-<button type="submit">Login</button>
-</form>
-</body>
-</html>
-`);
+<input name="username"/>
+<input name="password" type="password"/>
+<button>Login</button>
+</form></body></html>`);
 });
 
-// ======================
-// LOGIN POST
-// ======================
-app.post("/login",(req,res)=>{
-const {username,password}=req.body;
+app.post("/login", (req, res) => {
+  const { username, password } = req.body || {};
+  if (username !== ADMIN_USER || password !== ADMIN_PASS)
+    return res.status(401).send("Invalid");
 
-if(username!==ADMIN_USER || password!==ADMIN_PASS)
-return res.send("Invalid login");
-
-const token=putToken();
-
-res.send(renderDashboardHTML(token));
+  const token = putToken();
+  res.send(renderDashboardHTML(token));
 });
 
+
 // ======================
-// DEVICE HEARTBEAT
+// FIXED DASHBOARD ROUTE
 // ======================
-app.post("/heartbeat",async(req,res)=>{
 
-const {device_id,lat,lng}=req.body;
-
-await Device.findOneAndUpdate(
-{device_id},
-{
-device_id,
-lat,
-lng,
-last_seen:Date.now(),
-status:"online"
-},
-{upsert:true}
-);
-
-res.json({ok:true});
-
+app.get("/dashboard", (req, res) => {
+  const token = putToken();
+  res.send(renderDashboardHTML(token));
 });
 
-// ======================
-// DEVICES LIST
-// ======================
-app.get("/devices",async(req,res)=>{
+app.post("/register", async (req, res) => {
+  const { device_id, lat, lng } = req.body;
 
-const devices=await Device.find();
+  const now = Date.now();
 
-devices.forEach(d=>{
-if(Date.now()-d.last_seen>30000)
-d.status="offline";
+  const doc = await Device.findOneAndUpdate(
+    { device_id },
+    {
+      device_id,
+      lat,
+      lng,
+      last_seen: now,
+      status: "online",
+    },
+    { upsert: true, new: true }
+  );
+
+  res.json(doc);
 });
 
-res.json(devices);
+app.post("/heartbeat", async (req, res) => {
+  const { device_id } = req.body;
 
+  await Device.updateOne(
+    { device_id },
+    { last_seen: Date.now(), status: "online" }
+  );
+
+  res.json({ ok: true });
 });
 
-// ======================
-// MESSAGE API
-// ======================
-app.post("/api/simple",async(req,res)=>{
+app.get("/devices", async (req, res) => {
+  const now = Date.now();
 
-const {device_id,line1,line2}=req.body;
+  await Device.updateMany(
+    { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
+    { status: "offline" }
+  );
 
-console.log("SEND TO",device_id,line1,line2);
+  const data = await Device.find();
 
-res.json({ok:true});
-
+  res.json(data);
 });
 
-// ======================
-// DASHBOARD
-// ======================
-function renderDashboardHTML(TOKEN){
+app.post("/api/simple", requireAuth, async (req, res) => {
+  const { device_id, line1, line2 } = req.body;
 
+  console.log("SEND:", device_id, line1, line2);
+
+  res.json({ ok: true });
+});
+
+function renderDashboardHTML(TOKEN) {
 return `
 <!DOCTYPE html>
 <html>
 <head>
-
-<meta charset="utf-8"/>
-
-<style>
-
-body{
-margin:0;
-font-family:"Times New Roman";
-background:#fff7ed;
-}
-
-.sidebar{
-width:250px;
-background:white;
-height:100vh;
-float:left;
-padding:20px;
-border-right:1px solid #fed7aa;
-}
-
-.content{
-margin-left:250px;
-padding:20px;
-}
-
-.junction{
-padding:10px;
-border:1px solid #fed7aa;
-margin-bottom:6px;
-cursor:pointer;
-border-radius:8px;
-}
-
-.arm{
-margin-left:20px;
-margin-top:4px;
-}
-
-button{
-padding:10px;
-border:none;
-background:#f97316;
-color:white;
-border-radius:8px;
-cursor:pointer;
-}
-
-input{
-padding:8px;
-width:200px;
-}
-
-</style>
-
+<title>Dashboard</title>
 </head>
 
-<body>
+<body style="font-family:Times New Roman">
 
-<div class="sidebar">
+<h2>Display Monitor Dashboard</h2>
 
-<h3>MESSAGES</h3>
-
-<div id="junctionList"></div>
-
-</div>
-
-<div class="content">
-
-<h3>Send Message</h3>
-
-Device : <span id="device"></span>
+<select id="devSel"></select>
 
 <br><br>
 
-Line1<br>
+Line1
 <input id="line1"/>
 
 <br><br>
 
-Line2<br>
+Line2
 <input id="line2"/>
 
 <br><br>
 
-<button onclick="send()">Send to ESP</button>
-
-</div>
+<button onclick="send()">Send</button>
 
 <script>
 
-const TOKEN="${TOKEN}"
+const AUTH_TOKEN="${TOKEN}"
 
-let selectedDevice=""
+async function loadDevices(){
 
-const JUNCTIONS={
+const r=await fetch("/devices")
 
-"Ameerpet":{
-"Road1":"ameerpet_1",
-"Road2":"ameerpet_2",
-"Road3":"ameerpet_3",
-"Road4":"ameerpet_4"
-},
+const d=await r.json()
 
-"Paradise":{
-"Road1":"paradise_1",
-"Road2":"paradise_2",
-"Road3":"paradise_3",
-"Road4":"paradise_4"
-},
+const sel=document.getElementById("devSel")
 
-"Punjagutta":{
-"Road1":"punjagutta_1",
-"Road2":"punjagutta_2",
-"Road3":"punjagutta_3",
-"Road4":"punjagutta_4"
-}
+sel.innerHTML=""
 
-}
+d.forEach(x=>{
 
-function renderJunctions(){
+const o=document.createElement("option")
 
-const div=document.getElementById("junctionList")
+o.value=x.device_id
 
-Object.keys(JUNCTIONS).forEach(j=>{
+o.textContent=x.device_id+" ("+x.status+")"
 
-const junc=document.createElement("div")
-junc.className="junction"
-junc.innerText=j
-
-const arms=document.createElement("div")
-arms.style.display="none"
-
-Object.keys(JUNCTIONS[j]).forEach(a=>{
-
-const arm=document.createElement("div")
-arm.className="arm"
-
-const btn=document.createElement("button")
-btn.innerText=a
-
-btn.onclick=()=>{
-
-selectedDevice=JUNCTIONS[j][a]
-
-document.getElementById("device").innerText=selectedDevice
-
-}
-
-arm.appendChild(btn)
-
-arms.appendChild(arm)
-
-})
-
-junc.onclick=()=>{
-
-arms.style.display=
-arms.style.display==="none"?"block":"none"
-
-}
-
-div.appendChild(junc)
-div.appendChild(arms)
+sel.appendChild(o)
 
 })
 
 }
-
-renderJunctions()
 
 async function send(){
 
-if(!selectedDevice){
+const device_id=document.getElementById("devSel").value
 
-alert("select junction arm")
+const line1=document.getElementById("line1").value
 
-return
-
-}
-
-const payload={
-
-device_id:selectedDevice,
-
-line1:document.getElementById("line1").value,
-
-line2:document.getElementById("line2").value
-
-}
+const line2=document.getElementById("line2").value
 
 await fetch("/api/simple",{
 
 method:"POST",
 
 headers:{
-"Content-Type":"application/json"
+"Content-Type":"application/json",
+"X-Auth-Token":AUTH_TOKEN
 },
 
-body:JSON.stringify(payload)
+body:JSON.stringify({device_id,line1,line2})
 
 })
 
-alert("sent")
+alert("Sent")
 
 }
+
+loadDevices()
 
 </script>
 
 </body>
 </html>
-`
-
+`;
 }
 
-// ======================
-const PORT=process.env.PORT||5000;
+const PORT = process.env.PORT || 5000;
 
-app.listen(PORT,()=>{
-
-console.log("Server started "+PORT)
-
-});
+app.listen(PORT, () => console.log("Server started on port " + PORT));
