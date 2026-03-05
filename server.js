@@ -1,7 +1,3 @@
-see this is our code now existing one okay please in this i need to modify the massages as junction messages in that i need to show all junctions names when i click that tab only if i click again they will hide okay in that like ameerpet , pardise and etc traffic signal junctions in that and if i click the junction name in that the junction related arms i want to see like paradise have 4 arms means 4 roads when i click padaidse it will show as sub tabs of it arms and when i click them the msg send esp will appear for that esp only 
-
-
-
 // server.js ✅ FULL WORKING (NO RENDER ERRORS)
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
 // ✅ Login page (logo + username + password + powered by)
@@ -71,7 +67,22 @@ mongoose
 // ======================
 const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
+// ======================
+// JUNCTION CONFIG
+// ======================
 
+const JUNCTIONS = {
+
+  "NALLAGUTTA": {
+    arms: {
+
+      "KIMS HOSPITAL": "ESP_001",
+      "RANIGUNJ": "ESP_002"
+
+    }
+  }
+
+};
 // ======================
 // MODELS
 // ======================
@@ -85,43 +96,38 @@ const deviceSchema = new mongoose.Schema({
 
 function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
-
   return {
-
     red: pack([
-      ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
-      ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
-      ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
-      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE’S FUTURE"],
-      ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"]
+      ["STOP MEANS LIFE.", "BRAKE NOW. LIVE LONG."],
+      ["RED = RULE.", "RULES SAVE FAMILIES."],
+      ["DON'T RACE TIME.", "ARRIVE SAFE."],
+      ["WAIT A MINUTE.", "SAVE A LIFETIME."],
+      ["STOP HERE.", "START LIVING."],
     ]),
-
     amber: pack([
-      ["EASE OFF THE PEDAL NOW", "A CALM SLOWDOWN KEEPS EVERYONE SAFE"],
-      ["NO NEED TO RUSH THE JUNCTION", "A SECOND OF PATIENCE SAVES A LIFE"],
-      ["SLOW AND WATCH THE ROAD AHEAD", "CONTROL TODAY PREVENTS COLLISION"],
-      ["LET THE SPEED DROP GENTLY", "SMOOTH BRAKING SAVES FUEL TOO"],
-      ["PAUSE YOUR HURRY AT THE CROSSING", "SAFE STREETS START WITH PATIENCE"]
+      ["EASE OFF SPEED.", "CONTROL WINS."],
+      ["SLOW IS SMART.", "RISK IS COSTLY."],
+      ["PAUSE THE HURRY.", "KEEP IT SAFE."],
+      ["DON'T PUSH LUCK.", "STAY ALERT."],
+      ["CALM THE ACCELERATOR.", "HOME IS THE GOAL."],
     ]),
-
     green: pack([
-      ["SLOW DRIVING SAVES FUEL AND SAVES LIVES", "SMART SPEED PROTECTS PEOPLE AND PLANET"],
-      ["CALM DRIVING REDUCES ACCIDENTS AND POLLUTION", "RESPONSIBLE SPEED CREATES HEALTHY CITIES"],
-      ["GLIDE FORWARD WITH A SAFE GAP", "SPACE ON THE ROAD PREVENTS CRASHES"],
-      ["SPEED THRILLS BUT SAFETY SAVES", "SAFE DRIVING IS SMART DRIVING"],
-      ["MOVE AHEAD WITH CARE AND CONTROL", "ARRIVE SAFE EVERY TIME"]
+      ["GO — BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
+      ["MOVE SMART.", "DON'T RACE."],
+      ["EYES UP.", "PHONE DOWN."],
+      ["SMOOTH DRIVE.", "SAFE ARRIVAL."],
+      ["GREEN MEANS GO.", "NOT GAMBLE."],
     ]),
-
     no: pack([
-      ["WHEN SIGNALS FAIL DISCIPLINE MUST NOT", "CONTROL YOUR SPEED"],
-      ["FAST DRIVING AT JUNCTIONS INVITES ACCIDENTS", "SLOW DOWN AND STAY ALERT"],
-      ["WITHOUT SIGNALS SAFETY DEPENDS ON YOU", "DRIVE WITH PATIENCE"],
-      ["DISCIPLINED DRIVERS CREATE SAFE ROADS", "FOLLOW TRAFFIC RULES"],
-      ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"]
-    ])
-
+      ["SIGNAL OFF.", "DRIVE DEFENSIVE."],
+      ["SLOW DOWN.", "GIVE WAY."],
+      ["KEEP LEFT.", "KEEP SAFE."],
+      ["BE PATIENT.", "BE ALIVE."],
+      ["FOLLOW RULES.", "EVEN WITHOUT LIGHTS."],
+    ]),
   };
 }
+
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
   force: { type: String, default: "" }, // "" | red | amber | green
@@ -443,6 +449,15 @@ app.get("/devices", async (req, res) => {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
+// ======================
+// GET JUNCTIONS
+// ======================
+
+app.get("/junctions", (req,res)=>{
+
+  res.json(JUNCTIONS);
+
+});
 
 // ======================
 // CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
@@ -493,7 +508,75 @@ app.post("/api/simple", requireAuth, async (req, res) => {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
+// ======================
+// JUNCTION MESSAGE API
+// ======================
 
+app.post("/api/junctionSend", requireAuth, async (req,res)=>{
+
+  try{
+
+    const { junction, arm, force, sig, slot, line1, line2 } = req.body;
+
+    if(!junction)
+      return res.status(400).json({error:"junction required"});
+
+    const j = JUNCTIONS[junction];
+
+    if(!j)
+      return res.status(404).json({error:"junction not found"});
+
+    let devices = [];
+
+    if(arm === "ALL"){
+
+      devices = Object.values(j.arms);
+
+    }else{
+
+      if(!j.arms[arm])
+        return res.status(404).json({error:"arm not found"});
+
+      devices = [ j.arms[arm] ];
+    }
+
+    for(const device_id of devices){
+
+      const dev = await Device.findOne({device_id});
+
+      if(!isDeviceOnlineRow(dev)) continue;
+
+      const doc = await ensureMsgRow(device_id);
+
+      const packs = doc.packs || defaultPacks();
+
+      packs[sig][slot] = { l1: line1, l2: line2 };
+
+      doc.packs = packs;
+
+      const slotObj = doc.slot || { red:0, amber:0, green:0, no:0 };
+
+      slotObj[sig] = slot;
+
+      doc.slot = slotObj;
+
+      doc.v = Number(doc.v || 0) + 1;
+
+      doc.updated_at = Date.now();
+
+      await doc.save();
+
+    }
+
+    res.json({ ok:true, devices });
+
+  }catch(e){
+
+    res.status(500).json({error:String(e.message||e)});
+
+  }
+
+});
 // ESP pull (no auth)
 app.get("/api/pull/:device_id", async (req, res) => {
   try {
