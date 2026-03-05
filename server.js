@@ -1,25 +1,23 @@
 // server.js ✅ FULL WORKING (Render-safe)
-// LIGHT ORANGE+WHITE + TIMES NEW ROMAN
+// LIGHT ORANGE + WHITE + TIMES NEW ROMAN
 // ✅ Login page (logo + username + password + powered by)
-// ✅ Prevent browser autofill
+// ✅ Prevent browser autofill showing username/password before typing
 // ✅ No session persistence: refresh -> login
 // ✅ Dashboard has Logout ICON (top-right)
 // ✅ Status is STATIC (changes ONLY when you click Send)
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ Junction grouping: Junction -> Devices (NO ARM)
-// ✅ Backward compatible: accepts junction OR junction_name from ESP
+// ✅ Devices grouped by: Junction -> Arm -> Device
 
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
-const path = require("path");
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, "public"))); // public/arcadis.png, image.png, logo.png
+app.use(express.static("public")); // public/arcadis.png, image.png, logo.png
 
 // ======================
 // LOGIN (hardcoded)
@@ -74,18 +72,22 @@ const MSG_SLOTS = 5;
 // ======================
 // MODELS
 // ======================
-const deviceSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
+// IMPORTANT: we keep ONLY these fields going forward
+const deviceSchema = new mongoose.Schema(
+  {
+    device_id: { type: String, unique: true, required: true },
 
-  // ✅ Use ONLY one canonical field for junction in DB
-  junction_name: { type: String, default: "" },
+    junction_name: { type: String, default: "" }, // Rasoolpura
+    arm_name: { type: String, default: "" },      // Road 1
 
-  // telemetry
-  lat: { type: Number, default: 0 },
-  lng: { type: Number, default: 0 },
-  last_seen: { type: Number, default: 0 },
-  status: { type: String, default: "offline" },
-});
+    lat: { type: Number, default: 0 },
+    lng: { type: Number, default: 0 },
+
+    last_seen: { type: Number, default: 0 },
+    status: { type: String, default: "offline" },
+  },
+  { minimize: false }
+);
 
 function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
@@ -148,17 +150,6 @@ const CloudMsg = mongoose.model("CloudMsg", cloudMsgSchema);
 // ======================
 const signals = ["red", "amber", "green", "no"];
 
-function safeText(s) {
-  return String(s || "").trim();
-}
-
-// ✅ Accept old/new ESP fields and normalize to ONE junction_name
-function extractJunction(body) {
-  // Accept: junction_name OR junction
-  const j = safeText(body?.junction_name) || safeText(body?.junction);
-  return j;
-}
-
 function clampSlot(n) {
   const x = Number.isFinite(n) ? n : 0;
   if (x < 0) return 0;
@@ -199,6 +190,29 @@ function isDeviceOnlineRow(dev) {
   return Date.now() - last <= OFFLINE_AFTER_MS;
 }
 
+function normText(x) {
+  return String(x ?? "").trim();
+}
+
+// ✅ Backward-compat (your DB has old fields like "junction")
+// This makes dashboard NOT show Unknown, and it auto-saves into junction_name next time.
+function inferJunctionFromOldFields(bodyOrDoc) {
+  const j1 = normText(bodyOrDoc.junction_name);
+  if (j1) return j1;
+  const j2 = normText(bodyOrDoc.junction); // old
+  if (j2) return j2;
+  return "";
+}
+function inferArmFromOldFields(bodyOrDoc) {
+  const a1 = normText(bodyOrDoc.arm_name);
+  if (a1) return a1;
+  const a2 = normText(bodyOrDoc.arm_label); // old
+  if (a2) return a2;
+  const a3 = normText(bodyOrDoc.arm); // old
+  if (a3) return a3;
+  return "";
+}
+
 // ======================
 // AUTH MIDDLEWARE
 // ======================
@@ -209,12 +223,12 @@ function requireAuth(req, res, next) {
 }
 
 // ======================
-// ROUTES
+// HOME
 // ======================
 app.get("/", (req, res) => res.redirect("/login"));
 
 // ======================
-// LOGIN GET
+// LOGIN (GET)
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
@@ -226,7 +240,13 @@ app.get("/login", (req, res) => {
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
-  :root{ --orange:#f97316; --orange2:#fb923c; --border:#fed7aa; --muted:#6b7280; }
+  :root{
+    --orange:#f97316;
+    --orange2:#fb923c;
+    --card:#ffffff;
+    --border:#fed7aa;
+    --muted:#6b7280;
+  }
   .wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
   .card{
     width:min(520px, 94vw);
@@ -234,41 +254,57 @@ app.get("/login", (req, res) => {
     border:1px solid var(--border);
     border-radius:18px;
     box-shadow:0 20px 40px rgba(17,24,39,.12);
-    padding:18px; position:relative; overflow:hidden;
+    padding:18px;
+    position:relative;
+    overflow:hidden;
   }
   .glow{
     position:absolute;inset:-40px;
     background:radial-gradient(circle at 20% 10%, rgba(249,115,22,.22), transparent 55%),
                radial-gradient(circle at 80% 30%, rgba(251,146,60,.18), transparent 55%);
-    pointer-events:none; animation:floaty 6s ease-in-out infinite;
+    pointer-events:none;
+    animation:floaty 6s ease-in-out infinite;
   }
-  @keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(10px)}100%{transform:translateY(0)}}
-  .top{display:flex;align-items:center;gap:12px}
-  .logo{width:56px;height:56px;border-radius:14px;background:#fff;border:1px solid var(--border);object-fit:contain;padding:6px;}
+  @keyframes floaty{
+    0%{transform:translateY(0)}
+    50%{transform:translateY(10px)}
+    100%{transform:translateY(0)}
+  }
+  .top{display:flex;align-items:center;gap:12px;position:relative}
+  .logo{
+    width:56px;height:56px;border-radius:14px;
+    background:#fff;border:1px solid var(--border);
+    object-fit:contain;padding:6px;
+  }
   h1{margin:0;font-size:22px;font-weight:800}
   .sub{margin-top:4px;color:var(--muted);font-size:13px;font-weight:700}
   form{margin-top:16px;position:relative}
   label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
   input{
-    width:100%;padding:12px 12px;border-radius:14px;border:1px solid var(--border);background:#fff;
-    font-family:"Times New Roman", Times, serif;font-size:15px;outline:none;
+    width:100%;padding:12px 12px;border-radius:14px;
+    border:1px solid var(--border);background:#fff;
+    font-family:"Times New Roman", Times, serif;font-size:15px;
+    outline:none;
   }
   button{
-    width:100%;margin-top:14px;padding:12px;border-radius:14px;border:1px solid var(--orange2);
+    width:100%;margin-top:14px;padding:12px;border-radius:14px;
+    border:1px solid var(--orange2);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;font-weight:900;font-size:15px;cursor:pointer;
-    box-shadow:0 14px 26px rgba(249,115,22,.25);transition:.12s ease;
+    color:#fff;font-weight:900;font-size:15px;
+    cursor:pointer;
+    box-shadow:0 14px 26px rgba(249,115,22,.25);
+    transition:.12s ease;
   }
   button:hover{transform:translateY(-1px)}
   .err{margin-top:10px;color:#dc2626;font-weight:800;font-size:13px;min-height:18px}
   .footer{margin-top:14px;color:var(--muted);font-size:12px;font-weight:800}
-  input:-webkit-autofill{transition: background-color 9999s ease-in-out 0s;}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
     <div class="glow"></div>
+
     <div class="top">
       <img class="logo" src="/arcadis.png" alt="Arcadis" onerror="this.onerror=null; this.src='/image.png';" />
       <div>
@@ -277,15 +313,16 @@ app.get("/login", (req, res) => {
       </div>
     </div>
 
+    <!-- Autofill killer -->
     <form id="loginForm" autocomplete="off">
-      <input type="text" name="fakeuser" autocomplete="username" style="position:absolute;left:-9999px;opacity:0;height:0" />
-      <input type="password" name="fakepass" autocomplete="new-password" style="position:absolute;left:-9999px;opacity:0;height:0" />
+      <input style="position:absolute;left:-9999px;top:-9999px" autocomplete="username">
+      <input style="position:absolute;left:-9999px;top:-9999px" type="password" autocomplete="current-password">
 
       <label>Username</label>
-      <input id="u" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Username" required />
+      <input id="u" name="u_real" placeholder="Username" autocomplete="off" autocapitalize="off" spellcheck="false" readonly>
 
       <label>Password</label>
-      <input id="p" type="password" autocomplete="new-password" placeholder="Password" required />
+      <input id="p" name="p_real" type="password" placeholder="Password" autocomplete="new-password" readonly>
 
       <button type="submit">Login</button>
       <div class="err" id="err"></div>
@@ -298,23 +335,41 @@ app.get("/login", (req, res) => {
 <script>
   const form = document.getElementById("loginForm");
   const err  = document.getElementById("err");
-  window.addEventListener("pageshow", () => {
-    try{ document.getElementById("u").value=""; document.getElementById("p").value=""; }catch(e){}
-  });
+  const u = document.getElementById("u");
+  const p = document.getElementById("p");
+
+  // unlock on user interaction (prevents browser from pre-filling)
+  function unlock(){ u.removeAttribute("readonly"); p.removeAttribute("readonly"); }
+  u.addEventListener("focus", unlock, { once:true });
+  p.addEventListener("focus", unlock, { once:true });
+
+  // force blank at load
+  window.addEventListener("load", ()=>{ u.value=""; p.value=""; });
+
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
-    const username = document.getElementById("u").value.trim();
-    const password = document.getElementById("p").value;
+
+    const username = u.value.trim();
+    const password = p.value;
+
     try{
-      const r = await fetch("/login",{method:"POST",headers:{ "Content-Type":"application/json" },body: JSON.stringify({ username, password })});
+      const r = await fetch("/login",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ username, password })
+      });
+
       if(!r.ok){
         const out = await r.json().catch(()=>({}));
         err.textContent = out.error || "Invalid login";
         return;
       }
+
       const html = await r.text();
-      document.open(); document.write(html); document.close();
+      document.open();
+      document.write(html);
+      document.close();
     }catch(e){
       err.textContent = "Network error";
     }
@@ -324,7 +379,9 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// login post -> dashboard
+// ======================
+// LOGIN (POST) -> return dashboard HTML with token injected
+// ======================
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
@@ -334,139 +391,99 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// refresh -> login
+// refresh /dashboard -> go login
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // DEVICE REGISTER + HEARTBEAT
-// Accepts ESP payload:
-// {device_id, lat, lng, junction} OR {device_id, lat, lng, junction_name}
-// NO ARM is stored/used anywhere.
+// ESP must send: device_id, lat, lng, junction_name, arm_name (optional)
 // ======================
-app.post("/register", async (req, res) => {
+async function upsertDeviceFromPing(req, res) {
   try {
-    const { device_id, lat, lng } = req.body || {};
+    const b = req.body || {};
+
+    const device_id = normText(b.device_id);
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-    const jn = extractJunction(req.body);
+
+    const lat = typeof b.lat === "number" ? b.lat : Number(b.lat);
+    const lng = typeof b.lng === "number" ? b.lng : Number(b.lng);
+
+    const junction_name = inferJunctionFromOldFields(b);
+    const arm_name = inferArmFromOldFields(b);
+
+    const update = {
+      last_seen: now,
+      status: "online",
+    };
+
+    if (Number.isFinite(lat)) update.lat = lat;
+    if (Number.isFinite(lng)) update.lng = lng;
+    if (junction_name) update.junction_name = junction_name;
+    if (arm_name) update.arm_name = arm_name;
 
     const doc = await Device.findOneAndUpdate(
       { device_id },
-      {
-        $setOnInsert: { device_id },
-        $set: {
-          ...(jn ? { junction_name: jn } : {}),
-          lat: typeof lat === "number" ? lat : 0,
-          lng: typeof lng === "number" ? lng : 0,
-          last_seen: now,
-          status: "online",
-        },
-      },
+      { $setOnInsert: { device_id }, $set: update },
       { upsert: true, new: true }
     );
 
     await ensureMsgRow(device_id);
-    res.json({ message: "Registered", device: doc });
+    return res.json({ ok: true, device: doc });
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+    return res.status(500).json({ error: String(e.message || e) });
   }
-});
+}
 
-app.post("/heartbeat", async (req, res) => {
-  try {
-    const { device_id, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const now = Date.now();
-    const jn = extractJunction(req.body);
-
-    await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $set: {
-          status: "online",
-          last_seen: now,
-          ...(jn ? { junction_name: jn } : {}),
-          ...(typeof lat === "number" ? { lat } : {}),
-          ...(typeof lng === "number" ? { lng } : {}),
-        },
-      },
-      { upsert: true, new: true }
-    );
-
-    await ensureMsgRow(device_id);
-    res.json({ message: "OK" });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
+app.post("/register", upsertDeviceFromPing);
+app.post("/heartbeat", upsertDeviceFromPing);
 
 // ======================
-// DEVICES LIST
+// DEVICES LIST (normalized output)
 // ======================
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
+
     await Device.updateMany(
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
       { $set: { status: "offline" } }
     );
-    const data = await Device.find().sort({ last_seen: -1 });
-    res.json(data);
+
+    const rows = await Device.find().sort({ last_seen: -1 }).lean();
+
+    // normalize + backward compat for old docs in DB
+    const out = rows.map((d) => {
+      const junction_name = inferJunctionFromOldFields(d) || "";
+      const arm_name = inferArmFromOldFields(d) || "";
+      return {
+        device_id: d.device_id,
+        junction_name,
+        arm_name,
+        lat: Number(d.lat || 0),
+        lng: Number(d.lng || 0),
+        last_seen: Number(d.last_seen || 0),
+        status: String(d.status || "offline"),
+      };
+    });
+
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
-  }
-});
-
-// ======================
-// JUNCTION TREE (NO ARM)
-// Output:
-// [
-//   { name:"Rasoolpura", devices:[{device_id,status}] }
-// ]
-// ======================
-app.get("/junctions", async (req, res) => {
-  try {
-    const now = Date.now();
-    await Device.updateMany(
-      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
-      { $set: { status: "offline" } }
-    );
-
-    const devs = await Device.find({}, { device_id: 1, junction_name: 1, status: 1 }).lean();
-
-    const map = new Map();
-    for (const d of devs) {
-      const jn = safeText(d.junction_name) || "Unknown Junction";
-      if (!map.has(jn)) map.set(jn, []);
-      map.get(jn).push({ device_id: d.device_id, status: d.status || "offline" });
-    }
-
-    const result = Array.from(map.keys())
-      .sort((a, b) => a.localeCompare(b))
-      .map((name) => ({
-        name,
-        devices: map
-          .get(name)
-          .sort((x, y) => x.device_id.localeCompare(y.device_id)),
-      }));
-
-    res.json({ ok: true, junctions: result });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
 // ======================
 // CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
+// POST /api/simple  {device_id, force, sig, slot, line1, line2}
 // ======================
 app.post("/api/simple", requireAuth, async (req, res) => {
   try {
     const { device_id, force, sig, slot, line1, line2 } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
-    const dev = await Device.findOne({ device_id });
+    const dev = await Device.findOne({ device_id }).lean();
     if (!isDeviceOnlineRow(dev)) {
       return res.status(400).json({
         error: "Device is OFFLINE. Check device WiFi / power / network.",
@@ -536,7 +553,7 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD HTML (MESSAGES -> Junction -> Devices)
+// DASHBOARD HTML
 // ======================
 function renderDashboardHTML(TOKEN) {
   return `<!doctype html>
@@ -552,19 +569,31 @@ function renderDashboardHTML(TOKEN) {
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
-  :root{--orange:#f97316;--orange2:#fb923c;--bg:#fff7ed;--card:#ffffff;--border:#fed7aa;--muted:#6b7280;}
+  :root{
+    --orange:#f97316;
+    --orange2:#fb923c;
+    --bg:#fff7ed;
+    --card:#ffffff;
+    --border:#fed7aa;
+    --muted:#6b7280;
+  }
   .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
   .sidebar{
-    width:310px;min-width:310px;background:var(--card);
+    width:300px;min-width:300px;background:var(--card);
     border:1px solid var(--border);border-radius:16px;
     display:flex;flex-direction:column;padding:14px 12px;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);overflow:auto;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
+    overflow:auto;
   }
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
-  .brand img{width:46px;height:46px;border-radius:12px;background:#fff;object-fit:contain;padding:6px;border:1px solid var(--border)}
+  .brand img{
+    width:46px;height:46px;border-radius:12px;background:#fff;
+    object-fit:contain;padding:6px;border:1px solid var(--border)
+  }
   .brandTitle{font-size:16px;font-weight:800}
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
+
   .tabBtn{
     width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;
     user-select:none;border:1px solid var(--border);background:#fff;
@@ -577,61 +606,92 @@ function renderDashboardHTML(TOKEN) {
     color:#fff;border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-  .treeWrap{margin-top:10px;display:none}
-  .treeWrap.show{display:block}
-  .treeBox{border:1px solid var(--border);border-radius:14px;padding:10px;background:#fff}
-  .treeTitle{font-weight:900;margin-bottom:8px}
-  .jItem{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:8px}
-  .jHead{padding:10px 12px;background:#fff7ed;cursor:pointer;font-weight:900;display:flex;justify-content:space-between;align-items:center}
-  .jDevices{display:none;padding:8px 10px;background:#fff}
-  .jDevices.open{display:block}
-  .devBtn{
-    width:100%;text-align:left;margin-top:6px;
-    padding:10px;border-radius:10px;border:1px solid var(--border);
-    background:#fff;cursor:pointer;font-weight:800;
-    font-family:"Times New Roman", Times, serif;
-  }
-  .devBtn:hover{transform:translateY(-1px)}
-  .tiny{font-size:12px;color:var(--muted);font-weight:800;margin-top:6px}
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
 
   .content{
     flex:1;display:flex;flex-direction:column;background:var(--card);
     border:1px solid var(--border);border-radius:16px;overflow:hidden;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);position:relative;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
+    position:relative;
   }
-  .topbar{height:54px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;border-bottom:1px solid var(--border);background:#fff;}
+
+  .topbar{
+    height:54px;display:flex;align-items:center;justify-content:flex-end;
+    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
+  }
   .iconBtn{
-    width:42px;height:42px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    width:42px;height:42px;border-radius:14px;
+    display:flex;align-items:center;justify-content:center;
     border:1px solid var(--border);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
     box-shadow:0 12px 22px rgba(249,115,22,.22);
-    cursor:pointer;transition:.12s ease;
+    cursor:pointer;
+    transition:.12s ease;
   }
   .iconBtn:hover{transform:translateY(-1px)}
   .iconBtn svg{width:20px;height:20px;fill:#fff}
-  .cards{display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);background:#fff;flex-wrap:wrap;}
-  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px;}
+
+  .cards{
+    display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
+    background:#fff;flex-wrap:wrap;
+  }
+  .card{
+    flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;
+    padding:10px 12px;
+  }
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
-  .pad{padding:12px;overflow:auto}
-  .panel{max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
-  .h1{font-weight:900;font-size:16px}
+  .pad{padding:12px}
+  .panel{
+    max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
+  }
+  .h1{font-weight:900;font-size:18px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
   .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
   input,select,button{
     width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
+    background:#fff;color:#111827;outline:none;font-size:14px;
+    font-family:"Times New Roman", Times, serif;
   }
-  button.sendBtn{cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));border-color:var(--orange2);color:#fff;font-weight:900;}
-  button.sendBtn:disabled{opacity:.75;cursor:not-allowed}
+  button.sendBtn{
+    cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));
+    border-color:var(--orange2);color:#fff;font-weight:900;
+  }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
+
+  /* Junction tree in sidebar (inside Messages view) */
+  .treeBox{
+    margin-top:12px;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:#fffaf5;
+    padding:10px;
+  }
+  .treeTitle{
+    font-weight:900;
+    margin-bottom:8px;
+  }
+  .jBtn, .aBtn{
+    width:100%;
+    text-align:left;
+    padding:10px 10px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    cursor:pointer;
+    font-weight:900;
+  }
+  .jBtn{ margin-top:8px; }
+  .aBtn{ margin-top:8px; font-weight:800; }
+  .indent{ padding-left:12px; margin-top:6px; }
+  .smallNote{ margin-top:8px; font-size:12px; color:var(--muted); font-weight:800; }
+
   @media (max-width: 980px){
     .sidebar{width:260px;min-width:260px}
     .card{flex:1 1 160px}
@@ -652,15 +712,14 @@ function renderDashboardHTML(TOKEN) {
     </div>
 
     <div class="divider"></div>
-    <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
-    <div class="tabBtn" id="tabMsgBtn" onclick="toggleMessages()">MESSAGES</div>
 
-    <div class="treeWrap" id="treeWrap">
-      <div class="treeBox">
-        <div class="treeTitle">Junctions (Auto)</div>
-        <div id="junctionList"></div>
-        <div class="tiny">Click MESSAGES again to hide all junctions.</div>
-      </div>
+    <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
+    <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
+
+    <div id="treeContainer" class="treeBox" style="display:none">
+      <div class="treeTitle">Junctions (Auto)</div>
+      <div id="treeBody"></div>
+      <div class="smallNote">Click MESSAGES again to hide all junctions.</div>
     </div>
 
     <div class="footer">Powered by <b>Arcadis</b></div>
@@ -693,7 +752,7 @@ function renderDashboardHTML(TOKEN) {
             <div>
               <div class="lbl">Device (selected)</div>
               <select id="devSel"></select>
-              <div class="tiny" id="devHint"></div>
+              <div class="statusLine" id="currentLine" style="margin-top:6px">Current: -</div>
             </div>
             <div>
               <div class="lbl">Force</div>
@@ -729,9 +788,10 @@ function renderDashboardHTML(TOKEN) {
           </div>
 
           <div class="row">
-            <button type="button" class="sendBtn" id="sendBtn" onclick="sendToESP()">Send to ESP</button>
+            <button class="sendBtn" onclick="sendToESP()">Send to ESP</button>
           </div>
 
+          <!-- STATIC STATUS: changes ONLY on Send -->
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
         </div>
       </div>
@@ -746,33 +806,37 @@ function renderDashboardHTML(TOKEN) {
 
   function logout(){ window.location.href = "/login"; }
 
+  const treeContainer = document.getElementById("treeContainer");
+  let treeVisible = false;
+
   function showTab(which){
+    // toggle behavior for MESSAGES:
+    if(which==="msg"){
+      if(document.getElementById("tabMsgBtn").classList.contains("active") && treeVisible){
+        // clicking MESSAGES again hides junction list
+        treeVisible = false;
+        treeContainer.style.display = "none";
+      }else{
+        treeVisible = true;
+        treeContainer.style.display = "block";
+      }
+    }else{
+      treeVisible = false;
+      treeContainer.style.display = "none";
+    }
+
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
+    document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
   }
 
-  function toggleMessages(){
-    const treeWrap = document.getElementById("treeWrap");
-    const isOpen = treeWrap.classList.contains("show");
-    showTab("msg");
-    document.getElementById("tabMsgBtn").classList.add("active");
-    document.getElementById("tabMapBtn").classList.remove("active");
-    if(isOpen){
-      treeWrap.classList.remove("show");
-      collapseAll();
-    }else{
-      treeWrap.classList.add("show");
-    }
-  }
-  function collapseAll(){
-    document.querySelectorAll(".jDevices").forEach(x=>x.classList.remove("open"));
-  }
-
-  // MAP
   const map = L.map('map').setView([17.3850,78.4867], 12);
-  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { subdomains:['mt0','mt1','mt2','mt3'], maxZoom: 20 }).addTo(map);
+  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+    subdomains:['mt0','mt1','mt2','mt3'],
+    maxZoom: 20
+  }).addTo(map);
 
   const markers = new Map();
   function pinIcon(status){
@@ -798,17 +862,19 @@ function renderDashboardHTML(TOKEN) {
   ];
 
   const devSel = document.getElementById("devSel");
-  const devHint = document.getElementById("devHint");
   const sigSel = document.getElementById("sigSel");
   const slotSel= document.getElementById("slotSel");
   const line1  = document.getElementById("line1");
   const line2  = document.getElementById("line2");
   const forceSel = document.getElementById("forceSel");
   const statusTxt = document.getElementById("statusTxt");
-  const sendBtn = document.getElementById("sendBtn");
+  const currentLine = document.getElementById("currentLine");
 
   let DEVICE_CACHE = [];
+  let expandedJunction = null; // junction_name
+  let expandedArmKey = null;   // junction|arm
 
+  // ✅ Status changes ONLY when you click Send
   function setStatus(text, ok){
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
@@ -822,6 +888,7 @@ function renderDashboardHTML(TOKEN) {
       sigSel.appendChild(o);
     });
   }
+
   function fillSlotOptions(){
     const sig = sigSel.value;
     slotSel.innerHTML = "";
@@ -833,6 +900,7 @@ function renderDashboardHTML(TOKEN) {
       slotSel.appendChild(o);
     }
   }
+
   function autofillLines(){
     const sig = sigSel.value;
     const sl  = Number(slotSel.value||0);
@@ -840,135 +908,156 @@ function renderDashboardHTML(TOKEN) {
     line1.value = t.l1 || "";
     line2.value = t.l2 || "";
   }
+
   sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
   slotSel.addEventListener("change", autofillLines);
 
   function currentDeviceRow(device_id){
     return DEVICE_CACHE.find(x=>x.device_id===device_id) || null;
   }
-  function currentDeviceStatus(device_id){
-    const d = currentDeviceRow(device_id);
-    return d ? (d.status||"offline") : "offline";
+
+  function updateCurrentLine(){
+    const d = currentDeviceRow(devSel.value);
+    if(!d){ currentLine.textContent = "Current: -"; return; }
+    const j = d.junction_name || "Unknown Junction";
+    const a = d.arm_name ? (" | " + d.arm_name) : "";
+    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + (d.status||"offline").toUpperCase() + "</b> | " + j + a;
   }
-  function refreshDevHint(){
-    const id = devSel.value;
-    if(!id){ devHint.textContent=""; return; }
-    const row = currentDeviceRow(id);
-    const st = currentDeviceStatus(id);
-    const jn = row?.junction_name ? row.junction_name : "";
-    devHint.textContent = "Current: " + (jn?jn+" | ":"") + id + " | " + st.toUpperCase();
-  }
-  devSel.addEventListener("change", refreshDevHint);
+  devSel.addEventListener("change", updateCurrentLine);
 
-  async function loadDevices(){
-    try{
-      const res = await fetch("/devices", { cache: "no-store" });
-      const data = await res.json();
-      DEVICE_CACHE = Array.isArray(data) ? data : [];
+  function buildTree(){
+    const treeBody = document.getElementById("treeBody");
+    treeBody.innerHTML = "";
 
-      let on=0, off=0;
-      DEVICE_CACHE.forEach(d=> (d.status==="online"?on++:off++));
-      document.getElementById("total").innerText = DEVICE_CACHE.length;
-      document.getElementById("on").innerText = on;
-      document.getElementById("off").innerText = off;
+    // group by junction -> arm -> devices
+    const groups = new Map(); // junction -> Map(arm -> [devices])
+    DEVICE_CACHE.forEach(d=>{
+      const j = (d.junction_name || "").trim() || "Unknown Junction";
+      const a = (d.arm_name || "").trim() || "Device";
+      if(!groups.has(j)) groups.set(j, new Map());
+      const armMap = groups.get(j);
+      if(!armMap.has(a)) armMap.set(a, []);
+      armMap.get(a).push(d);
+    });
 
-      DEVICE_CACHE.forEach(d=>{
-        const isOn = (d.status==="online");
-        const pos = [d.lat || 0, d.lng || 0];
-        const icon = pinIcon(d.status);
-        const title = (d.junction_name ? d.junction_name + " — " : "") + d.device_id;
-        const pop =
-          "<b>"+title+"</b>" +
-          "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
-          "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
-
-        if(markers.has(d.device_id)){
-          markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
+    // sort junctions
+    const junctions = Array.from(groups.keys()).sort((a,b)=>a.localeCompare(b));
+    junctions.forEach(jName=>{
+      const jBtn = document.createElement("button");
+      jBtn.className = "jBtn";
+      jBtn.textContent = jName + (expandedJunction===jName ? " ▲" : " ▼");
+      jBtn.onclick = ()=>{
+        if(expandedJunction===jName){
+          expandedJunction = null;
+          expandedArmKey = null;
         }else{
-          const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
-          markers.set(d.device_id,m);
+          expandedJunction = jName;
+          expandedArmKey = null;
         }
-      });
+        buildTree();
+      };
+      treeBody.appendChild(jBtn);
 
-      const cur = devSel.value;
-      devSel.innerHTML = "";
-      DEVICE_CACHE.forEach(d=>{
-        const opt = document.createElement("option");
-        opt.value = d.device_id;
-        opt.textContent =
-          (d.junction_name ? d.junction_name + " - " : "") +
-          d.device_id + " (" + d.status + ")";
-        devSel.appendChild(opt);
-      });
+      if(expandedJunction === jName){
+        const armWrap = document.createElement("div");
+        armWrap.className = "indent";
 
-      if(cur){
-        const exists = Array.from(devSel.options).some(o=>o.value===cur);
-        if(exists) devSel.value = cur;
-      } else if (DEVICE_CACHE.length){
-        devSel.value = DEVICE_CACHE[0].device_id;
-      }
+        const armMap = groups.get(jName);
+        const arms = Array.from(armMap.keys()).sort((a,b)=>a.localeCompare(b));
+        arms.forEach(aName=>{
+          const key = jName + "|" + aName;
 
-      refreshDevHint();
-    }catch(e){
-      // keep stable
-    }
-  }
-
-  async function loadJunctionTree(){
-    try{
-      const r = await fetch("/junctions", { cache: "no-store" });
-      const out = await r.json();
-      const list = document.getElementById("junctionList");
-      list.innerHTML = "";
-
-      const junctions = (out && out.ok && Array.isArray(out.junctions)) ? out.junctions : [];
-      junctions.forEach(j=>{
-        const item = document.createElement("div");
-        item.className = "jItem";
-
-        const head = document.createElement("div");
-        head.className = "jHead";
-        head.innerHTML = "<span>"+j.name+"</span><span>▾</span>";
-
-        const devWrap = document.createElement("div");
-        devWrap.className = "jDevices";
-
-        (j.devices || []).forEach(d=>{
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "devBtn";
-          btn.textContent = d.device_id + " (" + (d.status||"offline") + ")";
-
-          btn.onclick = ()=>{
-            showTab("msg");
-            let opt = Array.from(devSel.options).find(o=>o.value===d.device_id);
-            if(!opt){
-              opt = document.createElement("option");
-              opt.value = d.device_id;
-              opt.textContent = d.device_id + " (unknown)";
-              devSel.appendChild(opt);
-            }
-            devSel.value = d.device_id;
-            refreshDevHint();
-            setStatus("Ready", true);
+          const aBtn = document.createElement("button");
+          aBtn.className = "aBtn";
+          aBtn.textContent = aName + (expandedArmKey===key ? " ▲" : " ▼");
+          aBtn.onclick = ()=>{
+            if(expandedArmKey===key) expandedArmKey=null;
+            else expandedArmKey=key;
+            buildTree();
           };
+          armWrap.appendChild(aBtn);
 
-          devWrap.appendChild(btn);
+          if(expandedArmKey === key){
+            const devWrap = document.createElement("div");
+            devWrap.className = "indent";
+
+            armMap.get(aName).forEach(dev=>{
+              const b = document.createElement("button");
+              b.className = "aBtn";
+              b.style.fontWeight = "800";
+              b.textContent = dev.device_id + " (" + dev.status + ")";
+              b.onclick = ()=>{
+                devSel.value = dev.device_id;
+                updateCurrentLine();
+                // keep message panel visible and tree visible
+                showTab("msg");
+              };
+              devWrap.appendChild(b);
+            });
+
+            armWrap.appendChild(devWrap);
+          }
         });
 
-        head.onclick = ()=>{
-          const isOpen = devWrap.classList.contains("open");
-          if(isOpen) devWrap.classList.remove("open");
-          else devWrap.classList.add("open");
-        };
+        treeBody.appendChild(armWrap);
+      }
+    });
+  }
 
-        item.appendChild(head);
-        item.appendChild(devWrap);
-        list.appendChild(item);
-      });
-    }catch(e){
-      // ignore
-    }
+  async function loadDevices(forceRefresh){
+    const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
+    const data = await res.json();
+    DEVICE_CACHE = Array.isArray(data) ? data : [];
+
+    let on=0, off=0;
+    DEVICE_CACHE.forEach(d=> (d.status==="online"?on++:off++));
+    document.getElementById("total").innerText = DEVICE_CACHE.length;
+    document.getElementById("on").innerText = on;
+    document.getElementById("off").innerText = off;
+
+    DEVICE_CACHE.forEach(d=>{
+      const isOn = (d.status==="online");
+      const pos = [d.lat || 0, d.lng || 0];
+      const icon = pinIcon(d.status);
+
+      const j = d.junction_name || "Unknown Junction";
+      const a = d.arm_name ? ("<br>Arm: <b>"+d.arm_name+"</b>") : "";
+
+      const pop =
+        "<b>"+d.device_id+"</b>" +
+        "<br>Junction: <b>"+j+"</b>" + a +
+        "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
+        "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+
+      if(markers.has(d.device_id)){
+        markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
+      }else{
+        const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
+        markers.set(d.device_id,m);
+      }
+    });
+
+    // device dropdown
+    const cur = devSel.value;
+    devSel.innerHTML = "";
+    DEVICE_CACHE.forEach(d=>{
+      const opt = document.createElement("option");
+      opt.value = d.device_id;
+      const j = d.junction_name || "Unknown Junction";
+      const a = d.arm_name ? (" | " + d.arm_name) : "";
+      opt.textContent = d.device_id + " (" + d.status + ") — " + j + a;
+      devSel.appendChild(opt);
+    });
+    if(cur) devSel.value = cur;
+    if(!devSel.value && DEVICE_CACHE[0]) devSel.value = DEVICE_CACHE[0].device_id;
+
+    updateCurrentLine();
+    if(treeVisible) buildTree();
+  }
+
+  function currentDeviceStatus(device_id){
+    const d = DEVICE_CACHE.find(x=>x.device_id===device_id);
+    return d ? (d.status||"offline") : "offline";
   }
 
   async function sendToESP(){
@@ -993,7 +1082,6 @@ function renderDashboardHTML(TOKEN) {
       line2: line2.value || ""
     };
 
-    sendBtn.disabled = true;
     setStatus("Sending...", true);
 
     try{
@@ -1007,27 +1095,23 @@ function renderDashboardHTML(TOKEN) {
       });
 
       const out = await r.json().catch(()=> ({}));
-      if(!r.ok) setStatus(out.error || "Send failed", false);
-      else setStatus("Sent", true);
+      if(!r.ok){
+        setStatus(out.error || "Send failed", false);
+        return;
+      }
+      setStatus("Sent", true);
     }catch(e){
       setStatus("Network error", false);
-    }finally{
-      sendBtn.disabled = false;
     }
   }
 
   fillSigOptions();
   fillSlotOptions();
   autofillLines();
-  setStatus("Ready", true);
 
-  async function refreshAll(){
-    await loadDevices();
-    await loadJunctionTree();
-  }
-
-  refreshAll();
-  setInterval(refreshAll, 4000);
+  // do NOT reset status in refresh loop
+  loadDevices(true);
+  setInterval(()=>loadDevices(false), 2000);
 
   const img = document.getElementById("arcLogo");
   img.addEventListener("error", ()=>{
