@@ -170,8 +170,17 @@ function requireAuth(req, res, next) {
 // ======================
 // LOGIN PAGE
 // ======================
-app.get("/", (req, res) => res.redirect("/login"));
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
 
+  if (username !== ADMIN_USER || password !== ADMIN_PASS) {
+    return res.send("Invalid login");
+  }
+
+  const token = putToken();
+  res.send(renderDashboardHTML(token));
+});
+app.get("/", (req, res) => res.redirect("/login"));
 app.get("/login", (req, res) => {
   res.send(`
   <html>
