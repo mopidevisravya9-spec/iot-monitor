@@ -5,9 +5,9 @@
 // ✅ No session persistence: refresh -> login
 // ✅ Dashboard has Logout ICON (top-right)
 // ✅ Status is STATIC (changes ONLY when you click Send)
-// ✅ Send shows "Sending..." then "Sent/Error" and stays until next click
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ MESSAGES tab toggles junction tree: Junction -> Roads (arms) -> device selection
+// ✅ MESSAGES tab toggles junction tree: Junction -> Roads -> device selection
+// ✅ Device stores junction + arm (arm auto-parsed from device_id like rasoolpura_arm1)
 
 const express = require("express");
 const cors = require("cors");
@@ -20,8 +20,7 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve public assets: public/arcadis.png, public/image.png, public/logo.png
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "public"))); // public/arcadis.png, image.png, logo.png
 
 // ======================
 // LOGIN (hardcoded)
@@ -75,9 +74,19 @@ const MSG_SLOTS = 5;
 
 // ======================
 // JUNCTIONS MAPPING
-// NOTE: Update device_id values to match your real ESP device IDs
+// IMPORTANT: device_id MUST match what ESP sends.
+// Example: Rasoolpura Road 1 -> rasoolpura_arm1
 // ======================
 const JUNCTIONS = [
+  {
+    name: "Rasoolpura",
+    arms: [
+      { name: "Road 1", device_id: "rasoolpura_arm1" },
+      { name: "Road 2", device_id: "rasoolpura_arm2" },
+      { name: "Road 3", device_id: "rasoolpura_arm3" },
+      { name: "Road 4", device_id: "rasoolpura_arm4" },
+    ],
+  },
   {
     name: "Ameerpet",
     arms: [
@@ -107,11 +116,29 @@ const JUNCTIONS = [
   },
 ];
 
+// Quick lookup: device_id -> { junctionName, armName }
+const DEVICE_LOOKUP = (() => {
+  const m = new Map();
+  for (const j of JUNCTIONS) {
+    for (const a of j.arms) {
+      m.set(String(a.device_id), { junction: j.name, arm_label: a.name });
+    }
+  }
+  return m;
+})();
+
 // ======================
 // MODELS
 // ======================
 const deviceSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
+
+  // metadata
+  junction: { type: String, default: "" }, // Rasoolpura, Paradise, ...
+  arm: { type: String, default: "" },      // arm1, arm2, ...
+  arm_label: { type: String, default: "" },// Road 1, Road 2, ...
+
+  // telemetry
   lat: { type: Number, default: 0 },
   lng: { type: Number, default: 0 },
   last_seen: { type: Number, default: 0 },
@@ -219,6 +246,24 @@ function isDeviceOnlineRow(dev) {
   return Date.now() - last <= OFFLINE_AFTER_MS;
 }
 
+// Parse arm from device_id formats:
+// rasoolpura_arm1  -> arm1
+// rasoolpura-arm2  -> arm2
+// arm3             -> arm3
+function parseArmFromDeviceId(device_id) {
+  const s = String(device_id || "").toLowerCase();
+  const m = s.match(/arm\s*([0-9]+)/i);
+  if (!m) return "";
+  return "arm" + m[1];
+}
+
+// Resolve junction + arm_label from our mapping, if possible
+function resolveFromMapping(device_id) {
+  const row = DEVICE_LOOKUP.get(String(device_id));
+  if (!row) return { junction: "", arm_label: "" };
+  return { junction: row.junction || "", arm_label: row.arm_label || "" };
+}
+
 // ======================
 // AUTH MIDDLEWARE
 // ======================
@@ -229,12 +274,15 @@ function requireAuth(req, res, next) {
 }
 
 // ======================
-// HOME
+// ROUTES
 // ======================
 app.get("/", (req, res) => res.redirect("/login"));
 
+// junctions for UI
+app.get("/junctions", (req, res) => res.json({ ok: true, junctions: JUNCTIONS }));
+
 // ======================
-// LOGIN (GET)
+// LOGIN GET
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
@@ -246,7 +294,7 @@ app.get("/login", (req, res) => {
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
-  :root{ --orange:#f97316; --orange2:#fb923c; --card:#ffffff; --border:#fed7aa; --muted:#6b7280; }
+  :root{ --orange:#f97316; --orange2:#fb923c; --border:#fed7aa; --muted:#6b7280; }
   .wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
   .card{
     width:min(520px, 94vw);
@@ -265,7 +313,7 @@ app.get("/login", (req, res) => {
     pointer-events:none; animation:floaty 6s ease-in-out infinite;
   }
   @keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(10px)}100%{transform:translateY(0)}}
-  .top{display:flex;align-items:center;gap:12px;position:relative}
+  .top{display:flex;align-items:center;gap:12px}
   .logo{width:56px;height:56px;border-radius:14px;background:#fff;border:1px solid var(--border);object-fit:contain;padding:6px;}
   h1{margin:0;font-size:22px;font-weight:800}
   .sub{margin-top:4px;color:var(--muted);font-size:13px;font-weight:700}
@@ -291,7 +339,6 @@ app.get("/login", (req, res) => {
 <div class="wrap">
   <div class="card">
     <div class="glow"></div>
-
     <div class="top">
       <img class="logo" src="/arcadis.png" alt="Arcadis" onerror="this.onerror=null; this.src='/image.png';" />
       <div>
@@ -306,10 +353,10 @@ app.get("/login", (req, res) => {
       <input type="password" name="fakepass" autocomplete="new-password" style="position:absolute;left:-9999px;opacity:0;height:0" />
 
       <label>Username</label>
-      <input id="u" name="u_real" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Username" required />
+      <input id="u" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Username" required />
 
       <label>Password</label>
-      <input id="p" name="p_real" type="password" autocomplete="new-password" placeholder="Password" required />
+      <input id="p" type="password" autocomplete="new-password" placeholder="Password" required />
 
       <button type="submit">Login</button>
       <div class="err" id="err"></div>
@@ -330,7 +377,6 @@ app.get("/login", (req, res) => {
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
-
     const username = document.getElementById("u").value.trim();
     const password = document.getElementById("p").value;
 
@@ -352,9 +398,7 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// ======================
-// LOGIN (POST) -> dashboard HTML with token injected
-// ======================
+// login post -> dashboard
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
@@ -364,30 +408,37 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// refresh /dashboard -> login (no persistence by design)
+// refresh -> login
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
-// Junction list API (UI uses it)
-// ======================
-app.get("/junctions", (req, res) => {
-  res.json({ ok: true, junctions: JUNCTIONS });
-});
-
-// ======================
 // DEVICE REGISTER + HEARTBEAT
+// ESP can send: { device_id, junction, lat, lng }
+// arm can be omitted (auto-parsed from device_id)
+// junction can be omitted (resolved from mapping if device_id exists in JUNCTIONS)
 // ======================
 app.post("/register", async (req, res) => {
   try {
-    const { device_id, lat, lng } = req.body || {};
+    const { device_id, junction, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
+
+    const arm = parseArmFromDeviceId(device_id);
+    const mapMeta = resolveFromMapping(device_id);
+
+    const finalJunction = String(junction || mapMeta.junction || "");
+    const finalArmLabel = String(mapMeta.arm_label || "");
+    const finalArm = String(arm || "");
+
     const doc = await Device.findOneAndUpdate(
       { device_id },
       {
         $setOnInsert: { device_id },
         $set: {
+          junction: finalJunction,
+          arm: finalArm,
+          arm_label: finalArmLabel,
           lat: typeof lat === "number" ? lat : 0,
           lng: typeof lng === "number" ? lng : 0,
           last_seen: now,
@@ -406,16 +457,27 @@ app.post("/register", async (req, res) => {
 
 app.post("/heartbeat", async (req, res) => {
   try {
-    const { device_id, lat, lng } = req.body || {};
+    const { device_id, junction, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
+
+    const arm = parseArmFromDeviceId(device_id);
+    const mapMeta = resolveFromMapping(device_id);
+
+    const finalJunction = String(junction || mapMeta.junction || "");
+    const finalArmLabel = String(mapMeta.arm_label || "");
+    const finalArm = String(arm || "");
+
     await Device.findOneAndUpdate(
       { device_id },
       {
         $set: {
-          last_seen: now,
           status: "online",
+          last_seen: now,
+          junction: finalJunction,
+          arm: finalArm,
+          arm_label: finalArmLabel,
           ...(typeof lat === "number" ? { lat } : {}),
           ...(typeof lng === "number" ? { lng } : {}),
         },
@@ -525,9 +587,11 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD HTML
+// DASHBOARD HTML (unchanged layout, tree inside MESSAGES)
 // ======================
 function renderDashboardHTML(TOKEN) {
+  // (Keeping the same dashboard HTML behavior you approved earlier)
+  // NOTE: tree uses /junctions and device selection uses device_id like rasoolpura_arm1
   return `<!doctype html>
 <html>
 <head>
@@ -571,15 +635,9 @@ function renderDashboardHTML(TOKEN) {
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
 
-  /* Junction tree inside sidebar */
   .treeWrap{margin-top:10px;display:none}
   .treeWrap.show{display:block}
-  .treeBox{
-    border:1px solid var(--border);
-    border-radius:14px;
-    padding:10px;
-    background:#fff;
-  }
+  .treeBox{border:1px solid var(--border);border-radius:14px;padding:10px;background:#fff}
   .treeTitle{font-weight:900;margin-bottom:8px;color:#111827}
   .jItem{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:8px}
   .jHead{
@@ -671,10 +729,8 @@ function renderDashboardHTML(TOKEN) {
     <div class="divider"></div>
 
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
-
     <div class="tabBtn" id="tabMsgBtn" onclick="toggleMessages()">MESSAGES</div>
 
-    <!-- Tree appears ONLY when you click MESSAGES -->
     <div class="treeWrap" id="treeWrap">
       <div class="treeBox">
         <div class="treeTitle">Junctions</div>
@@ -704,7 +760,6 @@ function renderDashboardHTML(TOKEN) {
 
     <div class="view active" id="viewMap"><div id="map"></div></div>
 
-    <!-- Message panel -->
     <div class="view" id="viewMsg">
       <div class="pad">
         <div class="panel">
@@ -769,28 +824,22 @@ function renderDashboardHTML(TOKEN) {
 
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
-    // Messages button gets active when msg view is shown (handled by toggleMessages)
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
-    // ✅ DO NOT change status here (static)
   }
 
-  // MESSAGES click: toggle tree + open msg view
   function toggleMessages(){
     const msgBtn = document.getElementById("tabMsgBtn");
     const treeWrap = document.getElementById("treeWrap");
     const isOpen = treeWrap.classList.contains("show");
 
-    // always switch to messages view
     showTab("msg");
     msgBtn.classList.add("active");
     document.getElementById("tabMapBtn").classList.remove("active");
 
-    // toggle tree visibility
     if(isOpen){
       treeWrap.classList.remove("show");
-      // also collapse all junction arms when hiding
       collapseAllArms();
     }else{
       treeWrap.classList.add("show");
@@ -803,10 +852,7 @@ function renderDashboardHTML(TOKEN) {
 
   // MAP
   const map = L.map('map').setView([17.3850,78.4867], 12);
-  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
-    subdomains:['mt0','mt1','mt2','mt3'],
-    maxZoom: 20
-  }).addTo(map);
+  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { subdomains:['mt0','mt1','mt2','mt3'], maxZoom: 20 }).addTo(map);
 
   const markers = new Map();
   function pinIcon(status){
@@ -822,7 +868,6 @@ function renderDashboardHTML(TOKEN) {
     return L.divIcon({ className:"", html, iconSize:[28,28], iconAnchor:[14,28] });
   }
 
-  // Messages template
   const templates = ${JSON.stringify(defaultPacks())};
   const MSG_SLOTS = ${MSG_SLOTS};
   const SIGS = [
@@ -881,16 +926,23 @@ function renderDashboardHTML(TOKEN) {
   sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
   slotSel.addEventListener("change", autofillLines);
 
+  function currentDeviceRow(device_id){
+    return DEVICE_CACHE.find(x=>x.device_id===device_id) || null;
+  }
   function currentDeviceStatus(device_id){
-    const d = DEVICE_CACHE.find(x=>x.device_id===device_id);
+    const d = currentDeviceRow(device_id);
     return d ? (d.status||"offline") : "offline";
   }
 
   function refreshDevHint(){
     const id = devSel.value;
     if(!id){ devHint.textContent=""; return; }
+    const row = currentDeviceRow(id);
     const st = currentDeviceStatus(id);
-    devHint.textContent = "Current: " + id + " | " + st.toUpperCase();
+    const jn = row?.junction ? row.junction : "";
+    const al = row?.arm_label ? row.arm_label : "";
+    const ar = row?.arm ? row.arm : "";
+    devHint.textContent = "Current: " + id + " | " + (jn?jn+" ":"") + (al?al+" ":"") + (ar?("(" + ar + ") ":"") : "") + "| " + st.toUpperCase();
   }
   devSel.addEventListener("change", refreshDevHint);
 
@@ -910,9 +962,14 @@ function renderDashboardHTML(TOKEN) {
         const isOn = (d.status==="online");
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
+
+        const title = (d.junction ? d.junction + " — " : "") + d.device_id;
+        const extra = (d.arm_label || d.arm) ? ("<br>Arm: <b>" + (d.arm_label || d.arm) + "</b>") : "";
+
         const pop =
-          "<b>"+d.device_id+"</b>" +
+          "<b>"+title+"</b>" +
           "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
+          extra +
           "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
 
         if(markers.has(d.device_id)){
@@ -923,19 +980,20 @@ function renderDashboardHTML(TOKEN) {
         }
       });
 
-      // Keep current selection
       const cur = devSel.value;
 
       devSel.innerHTML = "";
       DEVICE_CACHE.forEach(d=>{
         const opt = document.createElement("option");
         opt.value = d.device_id;
-        opt.textContent = d.device_id + " (" + d.status + ")";
+        opt.textContent =
+          (d.junction ? d.junction + " - " : "") +
+          (d.arm_label ? d.arm_label + " - " : "") +
+          d.device_id + " (" + d.status + ")";
         devSel.appendChild(opt);
       });
 
       if(cur){
-        // if device not present, keep as custom
         const exists = Array.from(devSel.options).some(o=>o.value===cur);
         if(exists) devSel.value = cur;
         else {
@@ -950,13 +1008,11 @@ function renderDashboardHTML(TOKEN) {
       }
 
       refreshDevHint();
-      // ✅ DO NOT touch status here
     }catch(e){
-      // ✅ DO NOT touch status here
+      // keep UI stable
     }
   }
 
-  // Build junction tree inside sidebar under MESSAGES
   async function loadJunctionTree(){
     try{
       const r = await fetch("/junctions", { cache: "no-store" });
@@ -983,10 +1039,7 @@ function renderDashboardHTML(TOKEN) {
           b.textContent = a.name;
 
           b.onclick = ()=>{
-            // Select device id for this road/arm and keep message UI active
             showTab("msg");
-
-            // ensure option exists
             let opt = Array.from(devSel.options).find(o=>o.value===a.device_id);
             if(!opt){
               opt = document.createElement("option");
@@ -995,15 +1048,13 @@ function renderDashboardHTML(TOKEN) {
               devSel.appendChild(opt);
             }
             devSel.value = a.device_id;
-
             refreshDevHint();
-            setStatus("Ready", true); // optional reset when selecting another arm
+            setStatus("Ready", true);
           };
 
           arms.appendChild(b);
         });
 
-        // Junction click toggles arms show/hide
         head.onclick = ()=>{
           const isOpen = arms.classList.contains("open");
           if(isOpen) arms.classList.remove("open");
@@ -1068,7 +1119,6 @@ function renderDashboardHTML(TOKEN) {
     }
   }
 
-  // Init
   fillSigOptions();
   fillSlotOptions();
   autofillLines();
