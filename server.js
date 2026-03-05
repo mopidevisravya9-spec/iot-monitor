@@ -6,8 +6,8 @@
 // ✅ Dashboard has Logout ICON (top-right)
 // ✅ Status is STATIC (changes ONLY when you click Send)
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ MESSAGES tab toggles junction tree: Junction -> Roads -> device selection
-// ✅ Device stores junction + arm (arm auto-parsed from device_id like rasoolpura_arm1)
+// ✅ ESP sends: device_id, lat, lng, junction_name, arm_name (Road 1..)
+// ✅ Dashboard builds MESSAGES tree automatically from DB devices (no hardcoding)
 
 const express = require("express");
 const cors = require("cors");
@@ -19,7 +19,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-
 app.use(express.static(path.join(__dirname, "public"))); // public/arcadis.png, image.png, logo.png
 
 // ======================
@@ -73,72 +72,16 @@ const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
 
 // ======================
-// JUNCTIONS MAPPING
-// IMPORTANT: device_id MUST match what ESP sends.
-// Example: Rasoolpura Road 1 -> rasoolpura_arm1
-// ======================
-const JUNCTIONS = [
-  {
-    name: "Rasoolpura",
-    arms: [
-      { name: "Road 1", device_id: "rasoolpura_arm1" },
-      { name: "Road 2", device_id: "rasoolpura_arm2" },
-      { name: "Road 3", device_id: "rasoolpura_arm3" },
-      { name: "Road 4", device_id: "rasoolpura_arm4" },
-    ],
-  },
-  {
-    name: "Ameerpet",
-    arms: [
-      { name: "Road 1", device_id: "ameerpet_arm1" },
-      { name: "Road 2", device_id: "ameerpet_arm2" },
-      { name: "Road 3", device_id: "ameerpet_arm3" },
-      { name: "Road 4", device_id: "ameerpet_arm4" },
-    ],
-  },
-  {
-    name: "Paradise",
-    arms: [
-      { name: "Road 1", device_id: "paradise_arm1" },
-      { name: "Road 2", device_id: "paradise_arm2" },
-      { name: "Road 3", device_id: "paradise_arm3" },
-      { name: "Road 4", device_id: "paradise_arm4" },
-    ],
-  },
-  {
-    name: "Punjagutta",
-    arms: [
-      { name: "Road 1", device_id: "punjagutta_arm1" },
-      { name: "Road 2", device_id: "punjagutta_arm2" },
-      { name: "Road 3", device_id: "punjagutta_arm3" },
-      { name: "Road 4", device_id: "punjagutta_arm4" },
-    ],
-  },
-];
-
-// Quick lookup: device_id -> { junctionName, armName }
-const DEVICE_LOOKUP = (() => {
-  const m = new Map();
-  for (const j of JUNCTIONS) {
-    for (const a of j.arms) {
-      m.set(String(a.device_id), { junction: j.name, arm_label: a.name });
-    }
-  }
-  return m;
-})();
-
-// ======================
 // MODELS
 // ======================
 const deviceSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
 
-  // metadata
-  junction: { type: String, default: "" }, // Rasoolpura, Paradise, ...
-  arm: { type: String, default: "" },      // arm1, arm2, ...
-  arm_label: { type: String, default: "" },// Road 1, Road 2, ...
+  // From ESP:
+  junction_name: { type: String, default: "" }, // Rasoolpura
+  arm_name: { type: String, default: "" },      // Road 1 / Road 2 ...
 
-  // telemetry
+  // Telemetry:
   lat: { type: Number, default: 0 },
   lng: { type: Number, default: 0 },
   last_seen: { type: Number, default: 0 },
@@ -212,7 +155,6 @@ function clampSlot(n) {
   if (x >= MSG_SLOTS) return MSG_SLOTS - 1;
   return x;
 }
-
 function normalizePack(arr) {
   const safe = Array.isArray(arr) ? arr : [];
   const out = [];
@@ -222,7 +164,6 @@ function normalizePack(arr) {
   }
   return out;
 }
-
 async function ensureMsgRow(device_id) {
   return CloudMsg.findOneAndUpdate(
     { device_id },
@@ -239,29 +180,13 @@ async function ensureMsgRow(device_id) {
     { upsert: true, new: true }
   );
 }
-
 function isDeviceOnlineRow(dev) {
   if (!dev) return false;
   const last = Number(dev.last_seen || 0);
   return Date.now() - last <= OFFLINE_AFTER_MS;
 }
-
-// Parse arm from device_id formats:
-// rasoolpura_arm1  -> arm1
-// rasoolpura-arm2  -> arm2
-// arm3             -> arm3
-function parseArmFromDeviceId(device_id) {
-  const s = String(device_id || "").toLowerCase();
-  const m = s.match(/arm\s*([0-9]+)/i);
-  if (!m) return "";
-  return "arm" + m[1];
-}
-
-// Resolve junction + arm_label from our mapping, if possible
-function resolveFromMapping(device_id) {
-  const row = DEVICE_LOOKUP.get(String(device_id));
-  if (!row) return { junction: "", arm_label: "" };
-  return { junction: row.junction || "", arm_label: row.arm_label || "" };
+function safeName(s) {
+  return String(s || "").trim();
 }
 
 // ======================
@@ -277,9 +202,6 @@ function requireAuth(req, res, next) {
 // ROUTES
 // ======================
 app.get("/", (req, res) => res.redirect("/login"));
-
-// junctions for UI
-app.get("/junctions", (req, res) => res.json({ ok: true, junctions: JUNCTIONS }));
 
 // ======================
 // LOGIN GET
@@ -302,9 +224,7 @@ app.get("/login", (req, res) => {
     border:1px solid var(--border);
     border-radius:18px;
     box-shadow:0 20px 40px rgba(17,24,39,.12);
-    padding:18px;
-    position:relative;
-    overflow:hidden;
+    padding:18px; position:relative; overflow:hidden;
   }
   .glow{
     position:absolute;inset:-40px;
@@ -348,7 +268,6 @@ app.get("/login", (req, res) => {
     </div>
 
     <form id="loginForm" autocomplete="off">
-      <!-- fake fields to absorb autofill -->
       <input type="text" name="fakeuser" autocomplete="username" style="position:absolute;left:-9999px;opacity:0;height:0" />
       <input type="password" name="fakepass" autocomplete="new-password" style="position:absolute;left:-9999px;opacity:0;height:0" />
 
@@ -369,17 +288,14 @@ app.get("/login", (req, res) => {
 <script>
   const form = document.getElementById("loginForm");
   const err  = document.getElementById("err");
-
   window.addEventListener("pageshow", () => {
     try{ document.getElementById("u").value=""; document.getElementById("p").value=""; }catch(e){}
   });
-
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
     const username = document.getElementById("u").value.trim();
     const password = document.getElementById("p").value;
-
     try{
       const r = await fetch("/login",{method:"POST",headers:{ "Content-Type":"application/json" },body: JSON.stringify({ username, password })});
       if(!r.ok){
@@ -413,32 +329,25 @@ app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // DEVICE REGISTER + HEARTBEAT
-// ESP can send: { device_id, junction, lat, lng }
-// arm can be omitted (auto-parsed from device_id)
-// junction can be omitted (resolved from mapping if device_id exists in JUNCTIONS)
+// ESP sends: device_id, junction_name, arm_name, lat, lng
+// Example: esp_1 -> junction_name=Rasoolpura, arm_name=Road 1
 // ======================
 app.post("/register", async (req, res) => {
   try {
-    const { device_id, junction, lat, lng } = req.body || {};
+    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-
-    const arm = parseArmFromDeviceId(device_id);
-    const mapMeta = resolveFromMapping(device_id);
-
-    const finalJunction = String(junction || mapMeta.junction || "");
-    const finalArmLabel = String(mapMeta.arm_label || "");
-    const finalArm = String(arm || "");
+    const jn = safeName(junction_name);
+    const an = safeName(arm_name);
 
     const doc = await Device.findOneAndUpdate(
       { device_id },
       {
         $setOnInsert: { device_id },
         $set: {
-          junction: finalJunction,
-          arm: finalArm,
-          arm_label: finalArmLabel,
+          junction_name: jn,
+          arm_name: an,
           lat: typeof lat === "number" ? lat : 0,
           lng: typeof lng === "number" ? lng : 0,
           last_seen: now,
@@ -457,17 +366,12 @@ app.post("/register", async (req, res) => {
 
 app.post("/heartbeat", async (req, res) => {
   try {
-    const { device_id, junction, lat, lng } = req.body || {};
+    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-
-    const arm = parseArmFromDeviceId(device_id);
-    const mapMeta = resolveFromMapping(device_id);
-
-    const finalJunction = String(junction || mapMeta.junction || "");
-    const finalArmLabel = String(mapMeta.arm_label || "");
-    const finalArm = String(arm || "");
+    const jn = safeName(junction_name);
+    const an = safeName(arm_name);
 
     await Device.findOneAndUpdate(
       { device_id },
@@ -475,9 +379,8 @@ app.post("/heartbeat", async (req, res) => {
         $set: {
           status: "online",
           last_seen: now,
-          junction: finalJunction,
-          arm: finalArm,
-          arm_label: finalArmLabel,
+          ...(jn ? { junction_name: jn } : {}),
+          ...(an ? { arm_name: an } : {}),
           ...(typeof lat === "number" ? { lat } : {}),
           ...(typeof lng === "number" ? { lng } : {}),
         },
@@ -506,6 +409,59 @@ app.get("/devices", async (req, res) => {
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======================
+// DYNAMIC TREE: Junctions -> Arms -> Devices
+// Builds from DB (no hardcoding)
+// Returns:
+// [
+//   { name:"Rasoolpura", arms:[ {name:"Road 1", devices:[{device_id,status}]} ] }
+// ]
+// ======================
+app.get("/junctions", async (req, res) => {
+  try {
+    const now = Date.now();
+    await Device.updateMany(
+      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
+      { $set: { status: "offline" } }
+    );
+
+    const devs = await Device.find({}, { device_id: 1, junction_name: 1, arm_name: 1, status: 1 }).lean();
+
+    const junctionMap = new Map();
+
+    for (const d of devs) {
+      const jn = safeName(d.junction_name) || "Unknown Junction";
+      const an = safeName(d.arm_name) || "Unknown Road";
+
+      if (!junctionMap.has(jn)) junctionMap.set(jn, new Map());
+      const armMap = junctionMap.get(jn);
+
+      if (!armMap.has(an)) armMap.set(an, []);
+      armMap.get(an).push({
+        device_id: d.device_id,
+        status: d.status || "offline",
+      });
+    }
+
+    // Convert to sorted array
+    const result = [];
+    const junctionNames = Array.from(junctionMap.keys()).sort((a,b)=>a.localeCompare(b));
+    for (const jn of junctionNames) {
+      const armMap = junctionMap.get(jn);
+      const armNames = Array.from(armMap.keys()).sort((a,b)=>a.localeCompare(b));
+      const arms = armNames.map(an => ({
+        name: an,
+        devices: armMap.get(an).sort((x,y)=>x.device_id.localeCompare(y.device_id)),
+      }));
+      result.push({ name: jn, arms });
+    }
+
+    res.json({ ok: true, junctions: result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
@@ -587,11 +543,9 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD HTML (unchanged layout, tree inside MESSAGES)
+// DASHBOARD HTML
 // ======================
 function renderDashboardHTML(TOKEN) {
-  // (Keeping the same dashboard HTML behavior you approved earlier)
-  // NOTE: tree uses /junctions and device selection uses device_id like rasoolpura_arm1
   return `<!doctype html>
 <html>
 <head>
@@ -605,17 +559,13 @@ function renderDashboardHTML(TOKEN) {
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
-  :root{
-    --orange:#f97316; --orange2:#fb923c;
-    --bg:#fff7ed; --card:#ffffff; --border:#fed7aa; --muted:#6b7280;
-  }
+  :root{--orange:#f97316;--orange2:#fb923c;--bg:#fff7ed;--card:#ffffff;--border:#fed7aa;--muted:#6b7280;}
   .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
   .sidebar{
-    width:290px;min-width:290px;background:var(--card);
+    width:310px;min-width:310px;background:var(--card);
     border:1px solid var(--border);border-radius:16px;
     display:flex;flex-direction:column;padding:14px 12px;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);
-    overflow:auto;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);overflow:auto;
   }
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
   .brand img{width:46px;height:46px;border-radius:12px;background:#fff;object-fit:contain;padding:6px;border:1px solid var(--border)}
@@ -634,42 +584,36 @@ function renderDashboardHTML(TOKEN) {
     color:#fff;border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-
   .treeWrap{margin-top:10px;display:none}
   .treeWrap.show{display:block}
   .treeBox{border:1px solid var(--border);border-radius:14px;padding:10px;background:#fff}
-  .treeTitle{font-weight:900;margin-bottom:8px;color:#111827}
+  .treeTitle{font-weight:900;margin-bottom:8px}
   .jItem{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:8px}
-  .jHead{
-    padding:10px 12px;background:#fff7ed;cursor:pointer;font-weight:900;
-    display:flex;justify-content:space-between;align-items:center;
-  }
+  .jHead{padding:10px 12px;background:#fff7ed;cursor:pointer;font-weight:900;display:flex;justify-content:space-between;align-items:center}
   .jArms{display:none;padding:8px 10px;background:#fff}
   .jArms.open{display:block}
-  .armBtn{
+  .armItem{border:1px solid var(--border);border-radius:10px;margin-top:8px;overflow:hidden}
+  .armHead{padding:10px;background:#fff;cursor:pointer;font-weight:900;display:flex;justify-content:space-between;align-items:center}
+  .devList{display:none;padding:8px;background:#fff7ed}
+  .devList.open{display:block}
+  .devBtn{
     width:100%;text-align:left;margin-top:6px;
     padding:10px;border-radius:10px;border:1px solid var(--border);
     background:#fff;cursor:pointer;font-weight:800;
     font-family:"Times New Roman", Times, serif;
   }
-  .armBtn:hover{transform:translateY(-1px)}
+  .devBtn:hover{transform:translateY(-1px)}
   .tiny{font-size:12px;color:var(--muted);font-weight:800;margin-top:6px}
-
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
 
   .content{
     flex:1;display:flex;flex-direction:column;background:var(--card);
     border:1px solid var(--border);border-radius:16px;overflow:hidden;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);
-    position:relative;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);position:relative;
   }
-  .topbar{
-    height:54px;display:flex;align-items:center;justify-content:flex-end;
-    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
-  }
+  .topbar{height:54px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;border-bottom:1px solid var(--border);background:#fff;}
   .iconBtn{
-    width:42px;height:42px;border-radius:14px;
-    display:flex;align-items:center;justify-content:center;
+    width:42px;height:42px;border-radius:14px;display:flex;align-items:center;justify-content:center;
     border:1px solid var(--border);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
     box-shadow:0 12px 22px rgba(249,115,22,.22);
@@ -677,16 +621,13 @@ function renderDashboardHTML(TOKEN) {
   }
   .iconBtn:hover{transform:translateY(-1px)}
   .iconBtn svg{width:20px;height:20px;fill:#fff}
-
   .cards{display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);background:#fff;flex-wrap:wrap;}
   .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px;}
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
-
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
-
   .pad{padding:12px;overflow:auto}
   .panel{max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
   .h1{font-weight:900;font-size:16px}
@@ -694,21 +635,16 @@ function renderDashboardHTML(TOKEN) {
   .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
   input,select,button{
     width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;
-    font-family:"Times New Roman", Times, serif;
+    background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
   }
-  button.sendBtn{
-    cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));
-    border-color:var(--orange2);color:#fff;font-weight:900;
-  }
+  button.sendBtn{cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));border-color:var(--orange2);color:#fff;font-weight:900;}
   button.sendBtn:disabled{opacity:.75;cursor:not-allowed}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
-
   @media (max-width: 980px){
-    .sidebar{width:240px;min-width:240px}
+    .sidebar{width:260px;min-width:260px}
     .card{flex:1 1 160px}
     .grid{grid-template-columns:1fr}
   }
@@ -727,13 +663,12 @@ function renderDashboardHTML(TOKEN) {
     </div>
 
     <div class="divider"></div>
-
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
     <div class="tabBtn" id="tabMsgBtn" onclick="toggleMessages()">MESSAGES</div>
 
     <div class="treeWrap" id="treeWrap">
       <div class="treeBox">
-        <div class="treeTitle">Junctions</div>
+        <div class="treeTitle">Junctions (Auto)</div>
         <div id="junctionList"></div>
         <div class="tiny">Click MESSAGES again to hide all junctions.</div>
       </div>
@@ -767,7 +702,7 @@ function renderDashboardHTML(TOKEN) {
 
           <div class="grid">
             <div>
-              <div class="lbl">Device (selected arm)</div>
+              <div class="lbl">Device (selected)</div>
               <select id="devSel"></select>
               <div class="tiny" id="devHint"></div>
             </div>
@@ -821,33 +756,27 @@ function renderDashboardHTML(TOKEN) {
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
 
   function logout(){ window.location.href = "/login"; }
-
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
   }
-
   function toggleMessages(){
-    const msgBtn = document.getElementById("tabMsgBtn");
     const treeWrap = document.getElementById("treeWrap");
     const isOpen = treeWrap.classList.contains("show");
-
     showTab("msg");
-    msgBtn.classList.add("active");
+    document.getElementById("tabMsgBtn").classList.add("active");
     document.getElementById("tabMapBtn").classList.remove("active");
-
     if(isOpen){
       treeWrap.classList.remove("show");
-      collapseAllArms();
+      collapseAll();
     }else{
       treeWrap.classList.add("show");
     }
   }
-
-  function collapseAllArms(){
-    document.querySelectorAll(".jArms").forEach(x=>x.classList.remove("open"));
+  function collapseAll(){
+    document.querySelectorAll(".jArms, .devList").forEach(x=>x.classList.remove("open"));
   }
 
   // MAP
@@ -902,7 +831,6 @@ function renderDashboardHTML(TOKEN) {
       sigSel.appendChild(o);
     });
   }
-
   function fillSlotOptions(){
     const sig = sigSel.value;
     slotSel.innerHTML = "";
@@ -914,7 +842,6 @@ function renderDashboardHTML(TOKEN) {
       slotSel.appendChild(o);
     }
   }
-
   function autofillLines(){
     const sig = sigSel.value;
     const sl  = Number(slotSel.value||0);
@@ -922,7 +849,6 @@ function renderDashboardHTML(TOKEN) {
     line1.value = t.l1 || "";
     line2.value = t.l2 || "";
   }
-
   sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
   slotSel.addEventListener("change", autofillLines);
 
@@ -933,16 +859,14 @@ function renderDashboardHTML(TOKEN) {
     const d = currentDeviceRow(device_id);
     return d ? (d.status||"offline") : "offline";
   }
-
   function refreshDevHint(){
     const id = devSel.value;
     if(!id){ devHint.textContent=""; return; }
     const row = currentDeviceRow(id);
     const st = currentDeviceStatus(id);
-    const jn = row?.junction ? row.junction : "";
-    const al = row?.arm_label ? row.arm_label : "";
-    const ar = row?.arm ? row.arm : "";
-    devHint.textContent = "Current: " + id + " | " + (jn?jn+" ":"") + (al?al+" ":"") + (ar?("(" + ar + ") ":"") : "") + "| " + st.toUpperCase();
+    const jn = row?.junction_name ? row.junction_name : "";
+    const an = row?.arm_name ? row.arm_name : "";
+    devHint.textContent = "Current: " + (jn?jn+" | ":"") + (an?an+" | ":"") + id + " | " + st.toUpperCase();
   }
   devSel.addEventListener("change", refreshDevHint);
 
@@ -963,13 +887,10 @@ function renderDashboardHTML(TOKEN) {
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
 
-        const title = (d.junction ? d.junction + " — " : "") + d.device_id;
-        const extra = (d.arm_label || d.arm) ? ("<br>Arm: <b>" + (d.arm_label || d.arm) + "</b>") : "";
-
+        const title = (d.junction_name ? d.junction_name + " — " : "") + (d.arm_name ? d.arm_name + " — " : "") + d.device_id;
         const pop =
           "<b>"+title+"</b>" +
           "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
-          extra +
           "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
 
         if(markers.has(d.device_id)){
@@ -981,14 +902,13 @@ function renderDashboardHTML(TOKEN) {
       });
 
       const cur = devSel.value;
-
       devSel.innerHTML = "";
       DEVICE_CACHE.forEach(d=>{
         const opt = document.createElement("option");
         opt.value = d.device_id;
         opt.textContent =
-          (d.junction ? d.junction + " - " : "") +
-          (d.arm_label ? d.arm_label + " - " : "") +
+          (d.junction_name ? d.junction_name + " - " : "") +
+          (d.arm_name ? d.arm_name + " - " : "") +
           d.device_id + " (" + d.status + ")";
         devSel.appendChild(opt);
       });
@@ -996,20 +916,13 @@ function renderDashboardHTML(TOKEN) {
       if(cur){
         const exists = Array.from(devSel.options).some(o=>o.value===cur);
         if(exists) devSel.value = cur;
-        else {
-          const opt = document.createElement("option");
-          opt.value = cur;
-          opt.textContent = cur + " (unknown)";
-          devSel.appendChild(opt);
-          devSel.value = cur;
-        }
       } else if (DEVICE_CACHE.length){
         devSel.value = DEVICE_CACHE[0].device_id;
       }
 
       refreshDevHint();
     }catch(e){
-      // keep UI stable
+      // keep stable
     }
   }
 
@@ -1029,40 +942,62 @@ function renderDashboardHTML(TOKEN) {
         head.className = "jHead";
         head.innerHTML = "<span>"+j.name+"</span><span>▾</span>";
 
-        const arms = document.createElement("div");
-        arms.className = "jArms";
+        const armsWrap = document.createElement("div");
+        armsWrap.className = "jArms";
 
         (j.arms || []).forEach(a=>{
-          const b = document.createElement("button");
-          b.type = "button";
-          b.className = "armBtn";
-          b.textContent = a.name;
+          const armItem = document.createElement("div");
+          armItem.className = "armItem";
 
-          b.onclick = ()=>{
-            showTab("msg");
-            let opt = Array.from(devSel.options).find(o=>o.value===a.device_id);
-            if(!opt){
-              opt = document.createElement("option");
-              opt.value = a.device_id;
-              opt.textContent = a.device_id + " (unknown)";
-              devSel.appendChild(opt);
-            }
-            devSel.value = a.device_id;
-            refreshDevHint();
-            setStatus("Ready", true);
+          const armHead = document.createElement("div");
+          armHead.className = "armHead";
+          armHead.innerHTML = "<span>"+a.name+"</span><span>▾</span>";
+
+          const devList = document.createElement("div");
+          devList.className = "devList";
+
+          (a.devices || []).forEach(d=>{
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "devBtn";
+            btn.textContent = d.device_id + " (" + (d.status||"offline") + ")";
+
+            btn.onclick = ()=>{
+              showTab("msg");
+              let opt = Array.from(devSel.options).find(o=>o.value===d.device_id);
+              if(!opt){
+                opt = document.createElement("option");
+                opt.value = d.device_id;
+                opt.textContent = d.device_id + " (unknown)";
+                devSel.appendChild(opt);
+              }
+              devSel.value = d.device_id;
+              refreshDevHint();
+              setStatus("Ready", true);
+            };
+
+            devList.appendChild(btn);
+          });
+
+          armHead.onclick = ()=>{
+            const open = devList.classList.contains("open");
+            if(open) devList.classList.remove("open");
+            else devList.classList.add("open");
           };
 
-          arms.appendChild(b);
+          armItem.appendChild(armHead);
+          armItem.appendChild(devList);
+          armsWrap.appendChild(armItem);
         });
 
         head.onclick = ()=>{
-          const isOpen = arms.classList.contains("open");
-          if(isOpen) arms.classList.remove("open");
-          else arms.classList.add("open");
+          const isOpen = armsWrap.classList.contains("open");
+          if(isOpen) armsWrap.classList.remove("open");
+          else armsWrap.classList.add("open");
         };
 
         item.appendChild(head);
-        item.appendChild(arms);
+        item.appendChild(armsWrap);
         list.appendChild(item);
       });
     }catch(e){
@@ -1072,7 +1007,6 @@ function renderDashboardHTML(TOKEN) {
 
   async function sendToESP(){
     const device_id = devSel.value;
-
     if(!device_id){
       setStatus("No device selected", false);
       return;
@@ -1124,9 +1058,13 @@ function renderDashboardHTML(TOKEN) {
   autofillLines();
   setStatus("Ready", true);
 
-  loadDevices();
-  loadJunctionTree();
-  setInterval(loadDevices, 3000);
+  async function refreshAll(){
+    await loadDevices();
+    await loadJunctionTree();
+  }
+
+  refreshAll();
+  setInterval(refreshAll, 4000);
 
   const img = document.getElementById("arcLogo");
   img.addEventListener("error", ()=>{
