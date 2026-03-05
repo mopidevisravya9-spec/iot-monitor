@@ -1,13 +1,13 @@
 // server.js ✅ FULL WORKING (Render-safe)
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
 // ✅ Login page (logo + username + password + powered by)
-// ✅ Prevent browser autofill showing username/password before typing
+// ✅ Prevent browser autofill
 // ✅ No session persistence: refresh -> login
 // ✅ Dashboard has Logout ICON (top-right)
 // ✅ Status is STATIC (changes ONLY when you click Send)
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ ESP sends: device_id, lat, lng, junction_name, arm_name (Road 1..)
-// ✅ Dashboard builds MESSAGES tree automatically from DB devices (no hardcoding)
+// ✅ Junction grouping: Junction -> Devices (NO ARM)
+// ✅ Backward compatible: accepts junction OR junction_name from ESP
 
 const express = require("express");
 const cors = require("cors");
@@ -77,11 +77,10 @@ const MSG_SLOTS = 5;
 const deviceSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
 
-  // From ESP:
-  junction_name: { type: String, default: "" }, // Rasoolpura
-  arm_name: { type: String, default: "" },      // Road 1 / Road 2 ...
+  // ✅ Use ONLY one canonical field for junction in DB
+  junction_name: { type: String, default: "" },
 
-  // Telemetry:
+  // telemetry
   lat: { type: Number, default: 0 },
   lng: { type: Number, default: 0 },
   last_seen: { type: Number, default: 0 },
@@ -149,12 +148,24 @@ const CloudMsg = mongoose.model("CloudMsg", cloudMsgSchema);
 // ======================
 const signals = ["red", "amber", "green", "no"];
 
+function safeText(s) {
+  return String(s || "").trim();
+}
+
+// ✅ Accept old/new ESP fields and normalize to ONE junction_name
+function extractJunction(body) {
+  // Accept: junction_name OR junction
+  const j = safeText(body?.junction_name) || safeText(body?.junction);
+  return j;
+}
+
 function clampSlot(n) {
   const x = Number.isFinite(n) ? n : 0;
   if (x < 0) return 0;
   if (x >= MSG_SLOTS) return MSG_SLOTS - 1;
   return x;
 }
+
 function normalizePack(arr) {
   const safe = Array.isArray(arr) ? arr : [];
   const out = [];
@@ -164,6 +175,7 @@ function normalizePack(arr) {
   }
   return out;
 }
+
 async function ensureMsgRow(device_id) {
   return CloudMsg.findOneAndUpdate(
     { device_id },
@@ -180,13 +192,11 @@ async function ensureMsgRow(device_id) {
     { upsert: true, new: true }
   );
 }
+
 function isDeviceOnlineRow(dev) {
   if (!dev) return false;
   const last = Number(dev.last_seen || 0);
   return Date.now() - last <= OFFLINE_AFTER_MS;
-}
-function safeName(s) {
-  return String(s || "").trim();
 }
 
 // ======================
@@ -329,25 +339,24 @@ app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // DEVICE REGISTER + HEARTBEAT
-// ESP sends: device_id, junction_name, arm_name, lat, lng
-// Example: esp_1 -> junction_name=Rasoolpura, arm_name=Road 1
+// Accepts ESP payload:
+// {device_id, lat, lng, junction} OR {device_id, lat, lng, junction_name}
+// NO ARM is stored/used anywhere.
 // ======================
 app.post("/register", async (req, res) => {
   try {
-    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
+    const { device_id, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-    const jn = safeName(junction_name);
-    const an = safeName(arm_name);
+    const jn = extractJunction(req.body);
 
     const doc = await Device.findOneAndUpdate(
       { device_id },
       {
         $setOnInsert: { device_id },
         $set: {
-          junction_name: jn,
-          arm_name: an,
+          ...(jn ? { junction_name: jn } : {}),
           lat: typeof lat === "number" ? lat : 0,
           lng: typeof lng === "number" ? lng : 0,
           last_seen: now,
@@ -366,12 +375,11 @@ app.post("/register", async (req, res) => {
 
 app.post("/heartbeat", async (req, res) => {
   try {
-    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
+    const { device_id, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
-    const jn = safeName(junction_name);
-    const an = safeName(arm_name);
+    const jn = extractJunction(req.body);
 
     await Device.findOneAndUpdate(
       { device_id },
@@ -380,7 +388,6 @@ app.post("/heartbeat", async (req, res) => {
           status: "online",
           last_seen: now,
           ...(jn ? { junction_name: jn } : {}),
-          ...(an ? { arm_name: an } : {}),
           ...(typeof lat === "number" ? { lat } : {}),
           ...(typeof lng === "number" ? { lng } : {}),
         },
@@ -413,11 +420,10 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// DYNAMIC TREE: Junctions -> Arms -> Devices
-// Builds from DB (no hardcoding)
-// Returns:
+// JUNCTION TREE (NO ARM)
+// Output:
 // [
-//   { name:"Rasoolpura", arms:[ {name:"Road 1", devices:[{device_id,status}]} ] }
+//   { name:"Rasoolpura", devices:[{device_id,status}] }
 // ]
 // ======================
 app.get("/junctions", async (req, res) => {
@@ -428,36 +434,23 @@ app.get("/junctions", async (req, res) => {
       { $set: { status: "offline" } }
     );
 
-    const devs = await Device.find({}, { device_id: 1, junction_name: 1, arm_name: 1, status: 1 }).lean();
+    const devs = await Device.find({}, { device_id: 1, junction_name: 1, status: 1 }).lean();
 
-    const junctionMap = new Map();
-
+    const map = new Map();
     for (const d of devs) {
-      const jn = safeName(d.junction_name) || "Unknown Junction";
-      const an = safeName(d.arm_name) || "Unknown Road";
-
-      if (!junctionMap.has(jn)) junctionMap.set(jn, new Map());
-      const armMap = junctionMap.get(jn);
-
-      if (!armMap.has(an)) armMap.set(an, []);
-      armMap.get(an).push({
-        device_id: d.device_id,
-        status: d.status || "offline",
-      });
+      const jn = safeText(d.junction_name) || "Unknown Junction";
+      if (!map.has(jn)) map.set(jn, []);
+      map.get(jn).push({ device_id: d.device_id, status: d.status || "offline" });
     }
 
-    // Convert to sorted array
-    const result = [];
-    const junctionNames = Array.from(junctionMap.keys()).sort((a,b)=>a.localeCompare(b));
-    for (const jn of junctionNames) {
-      const armMap = junctionMap.get(jn);
-      const armNames = Array.from(armMap.keys()).sort((a,b)=>a.localeCompare(b));
-      const arms = armNames.map(an => ({
-        name: an,
-        devices: armMap.get(an).sort((x,y)=>x.device_id.localeCompare(y.device_id)),
+    const result = Array.from(map.keys())
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => ({
+        name,
+        devices: map
+          .get(name)
+          .sort((x, y) => x.device_id.localeCompare(y.device_id)),
       }));
-      result.push({ name: jn, arms });
-    }
 
     res.json({ ok: true, junctions: result });
   } catch (e) {
@@ -543,7 +536,7 @@ app.get("/api/pull/:device_id", async (req, res) => {
 });
 
 // ======================
-// DASHBOARD HTML
+// DASHBOARD HTML (MESSAGES -> Junction -> Devices)
 // ======================
 function renderDashboardHTML(TOKEN) {
   return `<!doctype html>
@@ -590,12 +583,8 @@ function renderDashboardHTML(TOKEN) {
   .treeTitle{font-weight:900;margin-bottom:8px}
   .jItem{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:8px}
   .jHead{padding:10px 12px;background:#fff7ed;cursor:pointer;font-weight:900;display:flex;justify-content:space-between;align-items:center}
-  .jArms{display:none;padding:8px 10px;background:#fff}
-  .jArms.open{display:block}
-  .armItem{border:1px solid var(--border);border-radius:10px;margin-top:8px;overflow:hidden}
-  .armHead{padding:10px;background:#fff;cursor:pointer;font-weight:900;display:flex;justify-content:space-between;align-items:center}
-  .devList{display:none;padding:8px;background:#fff7ed}
-  .devList.open{display:block}
+  .jDevices{display:none;padding:8px 10px;background:#fff}
+  .jDevices.open{display:block}
   .devBtn{
     width:100%;text-align:left;margin-top:6px;
     padding:10px;border-radius:10px;border:1px solid var(--border);
@@ -756,12 +745,14 @@ function renderDashboardHTML(TOKEN) {
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
 
   function logout(){ window.location.href = "/login"; }
+
   function showTab(which){
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
     document.getElementById("viewMsg").classList.toggle("active", which==="msg");
     if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
   }
+
   function toggleMessages(){
     const treeWrap = document.getElementById("treeWrap");
     const isOpen = treeWrap.classList.contains("show");
@@ -776,7 +767,7 @@ function renderDashboardHTML(TOKEN) {
     }
   }
   function collapseAll(){
-    document.querySelectorAll(".jArms, .devList").forEach(x=>x.classList.remove("open"));
+    document.querySelectorAll(".jDevices").forEach(x=>x.classList.remove("open"));
   }
 
   // MAP
@@ -865,8 +856,7 @@ function renderDashboardHTML(TOKEN) {
     const row = currentDeviceRow(id);
     const st = currentDeviceStatus(id);
     const jn = row?.junction_name ? row.junction_name : "";
-    const an = row?.arm_name ? row.arm_name : "";
-    devHint.textContent = "Current: " + (jn?jn+" | ":"") + (an?an+" | ":"") + id + " | " + st.toUpperCase();
+    devHint.textContent = "Current: " + (jn?jn+" | ":"") + id + " | " + st.toUpperCase();
   }
   devSel.addEventListener("change", refreshDevHint);
 
@@ -886,8 +876,7 @@ function renderDashboardHTML(TOKEN) {
         const isOn = (d.status==="online");
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
-
-        const title = (d.junction_name ? d.junction_name + " — " : "") + (d.arm_name ? d.arm_name + " — " : "") + d.device_id;
+        const title = (d.junction_name ? d.junction_name + " — " : "") + d.device_id;
         const pop =
           "<b>"+title+"</b>" +
           "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
@@ -908,7 +897,6 @@ function renderDashboardHTML(TOKEN) {
         opt.value = d.device_id;
         opt.textContent =
           (d.junction_name ? d.junction_name + " - " : "") +
-          (d.arm_name ? d.arm_name + " - " : "") +
           d.device_id + " (" + d.status + ")";
         devSel.appendChild(opt);
       });
@@ -942,62 +930,40 @@ function renderDashboardHTML(TOKEN) {
         head.className = "jHead";
         head.innerHTML = "<span>"+j.name+"</span><span>▾</span>";
 
-        const armsWrap = document.createElement("div");
-        armsWrap.className = "jArms";
+        const devWrap = document.createElement("div");
+        devWrap.className = "jDevices";
 
-        (j.arms || []).forEach(a=>{
-          const armItem = document.createElement("div");
-          armItem.className = "armItem";
+        (j.devices || []).forEach(d=>{
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "devBtn";
+          btn.textContent = d.device_id + " (" + (d.status||"offline") + ")";
 
-          const armHead = document.createElement("div");
-          armHead.className = "armHead";
-          armHead.innerHTML = "<span>"+a.name+"</span><span>▾</span>";
-
-          const devList = document.createElement("div");
-          devList.className = "devList";
-
-          (a.devices || []).forEach(d=>{
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "devBtn";
-            btn.textContent = d.device_id + " (" + (d.status||"offline") + ")";
-
-            btn.onclick = ()=>{
-              showTab("msg");
-              let opt = Array.from(devSel.options).find(o=>o.value===d.device_id);
-              if(!opt){
-                opt = document.createElement("option");
-                opt.value = d.device_id;
-                opt.textContent = d.device_id + " (unknown)";
-                devSel.appendChild(opt);
-              }
-              devSel.value = d.device_id;
-              refreshDevHint();
-              setStatus("Ready", true);
-            };
-
-            devList.appendChild(btn);
-          });
-
-          armHead.onclick = ()=>{
-            const open = devList.classList.contains("open");
-            if(open) devList.classList.remove("open");
-            else devList.classList.add("open");
+          btn.onclick = ()=>{
+            showTab("msg");
+            let opt = Array.from(devSel.options).find(o=>o.value===d.device_id);
+            if(!opt){
+              opt = document.createElement("option");
+              opt.value = d.device_id;
+              opt.textContent = d.device_id + " (unknown)";
+              devSel.appendChild(opt);
+            }
+            devSel.value = d.device_id;
+            refreshDevHint();
+            setStatus("Ready", true);
           };
 
-          armItem.appendChild(armHead);
-          armItem.appendChild(devList);
-          armsWrap.appendChild(armItem);
+          devWrap.appendChild(btn);
         });
 
         head.onclick = ()=>{
-          const isOpen = armsWrap.classList.contains("open");
-          if(isOpen) armsWrap.classList.remove("open");
-          else armsWrap.classList.add("open");
+          const isOpen = devWrap.classList.contains("open");
+          if(isOpen) devWrap.classList.remove("open");
+          else devWrap.classList.add("open");
         };
 
         item.appendChild(head);
-        item.appendChild(armsWrap);
+        item.appendChild(devWrap);
         list.appendChild(item);
       });
     }catch(e){
@@ -1041,11 +1007,8 @@ function renderDashboardHTML(TOKEN) {
       });
 
       const out = await r.json().catch(()=> ({}));
-      if(!r.ok){
-        setStatus(out.error || "Send failed", false);
-      }else{
-        setStatus("Sent", true);
-      }
+      if(!r.ok) setStatus(out.error || "Send failed", false);
+      else setStatus("Sent", true);
     }catch(e){
       setStatus("Network error", false);
     }finally{
