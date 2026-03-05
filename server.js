@@ -1,4 +1,4 @@
-// server.js ✅ FULL WORKING (NO RENDER ERRORS) + ✅ JUNCTION FILTER IN MESSAGES
+// server.js ✅ FULL WORKING (NO RENDER ERRORS)
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
 // ✅ Login page (logo + username + password + powered by)
 // ✅ Prevent browser autofill showing username/password before typing
@@ -6,7 +6,6 @@
 // ✅ Dashboard has Logout ICON (top-right)
 // ✅ Status is STATIC (changes ONLY when you click Send)
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ NEW: Junction filter in Messages tab -> pick junction -> device list shows only that junction devices
 
 const express = require("express");
 const cors = require("cors");
@@ -74,7 +73,6 @@ const MSG_SLOTS = 5;
 // ======================
 const deviceSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
-  junction: { type: String, default: "Unassigned" }, // ✅ NEW
   lat: { type: Number, default: 0 },
   lng: { type: Number, default: 0 },
   last_seen: { type: Number, default: 0 },
@@ -85,12 +83,13 @@ function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
 
   return {
+
     red: pack([
       ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
       ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
       ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
       ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE’S FUTURE"],
-      ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"],
+      ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"]
     ]),
 
     amber: pack([
@@ -98,7 +97,7 @@ function defaultPacks() {
       ["NO NEED TO RUSH THE JUNCTION", "A SECOND OF PATIENCE SAVES A LIFE"],
       ["SLOW AND WATCH THE ROAD AHEAD", "CONTROL TODAY PREVENTS COLLISION"],
       ["LET THE SPEED DROP GENTLY", "SMOOTH BRAKING SAVES FUEL TOO"],
-      ["PAUSE YOUR HURRY AT THE CROSSING", "SAFE STREETS START WITH PATIENCE"],
+      ["PAUSE YOUR HURRY AT THE CROSSING", "SAFE STREETS START WITH PATIENCE"]
     ]),
 
     green: pack([
@@ -106,7 +105,7 @@ function defaultPacks() {
       ["CALM DRIVING REDUCES ACCIDENTS AND POLLUTION", "RESPONSIBLE SPEED CREATES HEALTHY CITIES"],
       ["GLIDE FORWARD WITH A SAFE GAP", "SPACE ON THE ROAD PREVENTS CRASHES"],
       ["SPEED THRILLS BUT SAFETY SAVES", "SAFE DRIVING IS SMART DRIVING"],
-      ["MOVE AHEAD WITH CARE AND CONTROL", "ARRIVE SAFE EVERY TIME"],
+      ["MOVE AHEAD WITH CARE AND CONTROL", "ARRIVE SAFE EVERY TIME"]
     ]),
 
     no: pack([
@@ -114,11 +113,11 @@ function defaultPacks() {
       ["FAST DRIVING AT JUNCTIONS INVITES ACCIDENTS", "SLOW DOWN AND STAY ALERT"],
       ["WITHOUT SIGNALS SAFETY DEPENDS ON YOU", "DRIVE WITH PATIENCE"],
       ["DISCIPLINED DRIVERS CREATE SAFE ROADS", "FOLLOW TRAFFIC RULES"],
-      ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"],
-    ]),
+      ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"]
+    ])
+
   };
 }
-
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
   force: { type: String, default: "" }, // "" | red | amber | green
@@ -373,7 +372,7 @@ app.get("/dashboard", (req, res) => res.redirect("/login"));
 // ======================
 app.post("/register", async (req, res) => {
   try {
-    const { device_id, lat, lng, junction } = req.body || {};
+    const { device_id, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
@@ -382,7 +381,6 @@ app.post("/register", async (req, res) => {
       {
         $setOnInsert: { device_id },
         $set: {
-          junction: String(junction || "Unassigned"),
           lat: typeof lat === "number" ? lat : 0,
           lng: typeof lng === "number" ? lng : 0,
           last_seen: now,
@@ -401,7 +399,7 @@ app.post("/register", async (req, res) => {
 
 app.post("/heartbeat", async (req, res) => {
   try {
-    const { device_id, lat, lng, junction } = req.body || {};
+    const { device_id, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
@@ -411,7 +409,6 @@ app.post("/heartbeat", async (req, res) => {
         $set: {
           last_seen: now,
           status: "online",
-          ...(junction ? { junction: String(junction) } : {}),
           ...(typeof lat === "number" ? { lat } : {}),
           ...(typeof lng === "number" ? { lng } : {}),
         },
@@ -432,7 +429,10 @@ app.post("/heartbeat", async (req, res) => {
 app.get("/devices", async (req, res) => {
   try {
     const now = Date.now();
-    await Device.updateMany({ last_seen: { $lt: now - OFFLINE_AFTER_MS } }, { $set: { status: "offline" } });
+    await Device.updateMany(
+      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
+      { $set: { status: "offline" } }
+    );
     const data = await Device.find().sort({ last_seen: -1 });
     res.json(data);
   } catch (e) {
@@ -450,7 +450,9 @@ app.post("/api/simple", requireAuth, async (req, res) => {
 
     const dev = await Device.findOne({ device_id });
     if (!isDeviceOnlineRow(dev)) {
-      return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
+      return res.status(400).json({
+        error: "Device is OFFLINE. Check device WiFi / power / network.",
+      });
     }
 
     const doc = await ensureMsgRow(device_id);
@@ -653,6 +655,7 @@ function renderDashboardHTML(TOKEN) {
   <div class="content">
     <div class="topbar">
       <button class="iconBtn" onclick="logout()" title="Logout" aria-label="Logout">
+        <!-- logout icon -->
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10 17l1.41-1.41L8.83 13H20v-2H8.83l2.58-2.59L10 7l-5 5 5 5z"></path>
           <path d="M4 4h8V2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h8v-2H4V4z"></path>
@@ -673,19 +676,11 @@ function renderDashboardHTML(TOKEN) {
         <div class="panel">
           <div class="h1">Cloud Message Control</div>
 
-          <!-- ✅ NEW: JUNCTION + DEVICE FILTER -->
           <div class="grid">
-            <div>
-              <div class="lbl">Junction</div>
-              <select id="jnSel"></select>
-            </div>
             <div>
               <div class="lbl">Device</div>
               <select id="devSel"></select>
             </div>
-          </div>
-
-          <div class="grid">
             <div>
               <div class="lbl">Force</div>
               <select id="forceSel">
@@ -695,7 +690,6 @@ function renderDashboardHTML(TOKEN) {
                 <option value="green">GREEN</option>
               </select>
             </div>
-            <div></div>
           </div>
 
           <div class="grid">
@@ -779,7 +773,6 @@ function renderDashboardHTML(TOKEN) {
     {k:"no",    name:"NO SIGNAL"}
   ];
 
-  const jnSel  = document.getElementById("jnSel");   // ✅ NEW
   const devSel = document.getElementById("devSel");
   const sigSel = document.getElementById("sigSel");
   const slotSel= document.getElementById("slotSel");
@@ -831,55 +824,6 @@ function renderDashboardHTML(TOKEN) {
   sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
   slotSel.addEventListener("change", autofillLines);
 
-  // ✅ NEW: Junction filtering helpers
-  function uniqJunctions(list){
-    const set = new Set();
-    list.forEach(d => set.add(String(d.junction || "Unassigned")));
-    return Array.from(set).sort((a,b)=>a.localeCompare(b));
-  }
-
-  function fillJunctionOptions(){
-    const cur = jnSel.value;
-    const js = uniqJunctions(DEVICE_CACHE);
-
-    jnSel.innerHTML = "";
-    const allOpt = document.createElement("option");
-    allOpt.value = "__ALL__";
-    allOpt.textContent = "ALL JUNCTIONS";
-    jnSel.appendChild(allOpt);
-
-    js.forEach(j=>{
-      const o = document.createElement("option");
-      o.value = j;
-      o.textContent = j;
-      jnSel.appendChild(o);
-    });
-
-    if(cur && Array.from(jnSel.options).some(o=>o.value===cur)) jnSel.value = cur;
-    else jnSel.value = "__ALL__";
-  }
-
-  function fillDeviceOptionsFiltered(){
-    const curDev = devSel.value;
-    const j = jnSel.value;
-
-    const filtered = (j === "__ALL__")
-      ? DEVICE_CACHE
-      : DEVICE_CACHE.filter(d => String(d.junction || "Unassigned") === j);
-
-    devSel.innerHTML = "";
-    filtered.forEach(d=>{
-      const opt = document.createElement("option");
-      opt.value = d.device_id;
-      opt.textContent = d.device_id + " (" + d.status + ")";
-      devSel.appendChild(opt);
-    });
-
-    if(curDev && Array.from(devSel.options).some(o=>o.value===curDev)) devSel.value = curDev;
-  }
-
-  jnSel.addEventListener("change", ()=>{ fillDeviceOptionsFiltered(); });
-
   async function loadDevices(forceRefresh){
     try{
       const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
@@ -898,7 +842,6 @@ function renderDashboardHTML(TOKEN) {
         const icon = pinIcon(d.status);
         const pop =
           "<b>"+d.device_id+"</b>" +
-          "<br>Junction: <b>"+(d.junction || "Unassigned")+"</b>" +
           "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
           "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
 
@@ -910,13 +853,20 @@ function renderDashboardHTML(TOKEN) {
         }
       });
 
-      // ✅ NEW: junction + filtered devices (keeps selection)
-      fillJunctionOptions();
-      fillDeviceOptionsFiltered();
+      const cur = devSel.value;
+      devSel.innerHTML = "";
+      DEVICE_CACHE.forEach(d=>{
+        const opt = document.createElement("option");
+        opt.value = d.device_id;
+        opt.textContent = d.device_id + " (" + d.status + ")";
+        devSel.appendChild(opt);
+      });
+      if(cur) devSel.value = cur;
 
       // ✅ DO NOT set status here (keeps it static)
     }catch(e){
       if(!STATUS_LOCKED){
+        // only show this if user never pressed send
         statusTxt.innerHTML = "Status: Network issue <span class='bad'>✗</span>";
       }
     }
