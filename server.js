@@ -1,4 +1,6 @@
-// server.js ✅ FULL WORKING (NO RENDER ERRORS)
+// server.js
+// FULL WORKING SERVER WITH JUNCTION CONTROL
+// Arcadis Display Health Monitor
 
 const express = require("express");
 const cors = require("cors");
@@ -11,6 +13,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
+// ======================
+// LOGIN
+// ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
@@ -38,135 +43,166 @@ function isValidToken(t) {
   return true;
 }
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [t, row] of TOKENS.entries()) {
-    if (now > row.exp) TOKENS.delete(t);
-  }
-}, 60000);
-
-const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
+// ======================
+// DATABASE
+// ======================
+const MONGO_URI = "mongodb://127.0.0.1:27017/iot-monitor";
 
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
-  .catch((err) => console.log("DB Error:", err?.message || err));
+  .catch((err) => console.log("DB Error:", err));
 
+// ======================
+// CONSTANTS
+// ======================
 const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
 
+// ======================
+// JUNCTION CONFIG
+// ======================
+const JUNCTIONS = {
+  NALLAGUTTA: {
+    arms: {
+      "KIMS HOSPITAL": "ESP_001",
+      RANIGUNJ: "ESP_002",
+    },
+  },
+};
+
+// ======================
+// MODELS
+// ======================
 const deviceSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
-  lat: { type: Number, default: 0 },
-  lng: { type: Number, default: 0 },
-  last_seen: { type: Number, default: 0 },
-  status: { type: String, default: "offline" },
+  device_id: { type: String, unique: true },
+  lat: Number,
+  lng: Number,
+  last_seen: Number,
+  status: String,
 });
 
+const Device = mongoose.model("Device", deviceSchema);
+
+const cloudMsgSchema = new mongoose.Schema({
+  device_id: { type: String, unique: true },
+  force: String,
+  slot: Object,
+  packs: Object,
+  v: Number,
+  updated_at: Number,
+});
+
+const CloudMsg = mongoose.model("CloudMsg", cloudMsgSchema);
+
+// ======================
+// MESSAGE DEFAULTS
+// ======================
 function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
 
   return {
     red: pack([
-      ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
-      ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
-      ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
-      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE’S FUTURE"],
-      ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"],
+      ["STOP MEANS LIFE.", "BRAKE NOW. LIVE LONG."],
+      ["RED = RULE.", "RULES SAVE FAMILIES."],
+      ["DON'T RACE TIME.", "ARRIVE SAFE."],
+      ["WAIT A MINUTE.", "SAVE A LIFETIME."],
+      ["STOP HERE.", "START LIVING."],
     ]),
     amber: pack([
-      ["EASE OFF THE PEDAL NOW", "A CALM SLOWDOWN KEEPS EVERYONE SAFE"],
-      ["NO NEED TO RUSH THE JUNCTION", "A SECOND OF PATIENCE SAVES A LIFE"],
-      ["SLOW AND WATCH THE ROAD AHEAD", "CONTROL TODAY PREVENTS COLLISION"],
-      ["LET THE SPEED DROP GENTLY", "SMOOTH BRAKING SAVES FUEL TOO"],
-      ["PAUSE YOUR HURRY AT THE CROSSING", "SAFE STREETS START WITH PATIENCE"],
+      ["EASE OFF SPEED.", "CONTROL WINS."],
+      ["SLOW IS SMART.", "RISK IS COSTLY."],
+      ["PAUSE THE HURRY.", "KEEP IT SAFE."],
+      ["DON'T PUSH LUCK.", "STAY ALERT."],
+      ["CALM THE ACCELERATOR.", "HOME IS THE GOAL."],
     ]),
     green: pack([
-      [
-        "SLOW DRIVING SAVES FUEL AND SAVES LIVES",
-        "SMART SPEED PROTECTS PEOPLE AND PLANET",
-      ],
-      [
-        "CALM DRIVING REDUCES ACCIDENTS AND POLLUTION",
-        "RESPONSIBLE SPEED CREATES HEALTHY CITIES",
-      ],
-      ["GLIDE FORWARD WITH A SAFE GAP", "SPACE ON THE ROAD PREVENTS CRASHES"],
-      ["SPEED THRILLS BUT SAFETY SAVES", "SAFE DRIVING IS SMART DRIVING"],
-      ["MOVE AHEAD WITH CARE AND CONTROL", "ARRIVE SAFE EVERY TIME"],
+      ["GO — BUT STAY ALERT.", "SAFE DISTANCE ALWAYS."],
+      ["MOVE SMART.", "DON'T RACE."],
+      ["EYES UP.", "PHONE DOWN."],
+      ["SMOOTH DRIVE.", "SAFE ARRIVAL."],
+      ["GREEN MEANS GO.", "NOT GAMBLE."],
     ]),
     no: pack([
-      ["WHEN SIGNALS FAIL DISCIPLINE MUST NOT", "CONTROL YOUR SPEED"],
-      ["FAST DRIVING AT JUNCTIONS INVITES ACCIDENTS", "SLOW DOWN AND STAY ALERT"],
-      ["WITHOUT SIGNALS SAFETY DEPENDS ON YOU", "DRIVE WITH PATIENCE"],
-      ["DISCIPLINED DRIVERS CREATE SAFE ROADS", "FOLLOW TRAFFIC RULES"],
-      ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"],
+      ["SIGNAL OFF.", "DRIVE DEFENSIVE."],
+      ["SLOW DOWN.", "GIVE WAY."],
+      ["KEEP LEFT.", "KEEP SAFE."],
+      ["BE PATIENT.", "BE ALIVE."],
+      ["FOLLOW RULES.", "EVEN WITHOUT LIGHTS."],
     ]),
   };
 }
 
-const cloudMsgSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
-  force: { type: String, default: "" },
-  slot: {
-    red: { type: Number, default: 0 },
-    amber: { type: Number, default: 0 },
-    green: { type: Number, default: 0 },
-    no: { type: Number, default: 0 },
-  },
-  packs: {
-    red: { type: Array, default: () => defaultPacks().red },
-    amber: { type: Array, default: () => defaultPacks().amber },
-    green: { type: Array, default: () => defaultPacks().green },
-    no: { type: Array, default: () => defaultPacks().no },
-  },
-  v: { type: Number, default: 0 },
-  updated_at: { type: Number, default: 0 },
-});
+// ======================
+// HELPERS
+// ======================
+async function ensureMsgRow(device_id) {
+  return CloudMsg.findOneAndUpdate(
+    { device_id },
+    {
+      $setOnInsert: {
+        device_id,
+        force: "",
+        slot: { red: 0, amber: 0, green: 0, no: 0 },
+        packs: defaultPacks(),
+        v: 0,
+        updated_at: 0,
+      },
+    },
+    { upsert: true, new: true }
+  );
+}
 
-const Device = mongoose.model("Device", deviceSchema);
-const CloudMsg = mongoose.model("CloudMsg", cloudMsgSchema);
+function isDeviceOnlineRow(dev) {
+  if (!dev) return false;
+  return Date.now() - dev.last_seen <= OFFLINE_AFTER_MS;
+}
 
+// ======================
+// AUTH
+// ======================
 function requireAuth(req, res, next) {
   const token = req.headers["x-auth-token"];
   if (isValidToken(token)) return next();
   return res.status(401).json({ error: "Unauthorized" });
 }
 
+// ======================
+// LOGIN PAGE
+// ======================
 app.get("/", (req, res) => res.redirect("/login"));
 
 app.get("/login", (req, res) => {
-  res.send(`<html><body><h2>Login</h2>
-<form method="POST" action="/login">
-<input name="username"/>
-<input name="password" type="password"/>
-<button>Login</button>
-</form></body></html>`);
+  res.send(`
+  <html>
+  <body style="font-family:Times New Roman;background:#fff7ed;text-align:center">
+  <h2>Display Health Monitor</h2>
+  <form method="POST" action="/login">
+  <input name="username" placeholder="Username"/><br><br>
+  <input name="password" type="password" placeholder="Password"/><br><br>
+  <button>Login</button>
+  </form>
+  </body>
+  </html>
+  `);
 });
 
 app.post("/login", (req, res) => {
-  const { username, password } = req.body || {};
-  if (username !== ADMIN_USER || password !== ADMIN_PASS)
-    return res.status(401).send("Invalid");
+  const { username, password } = req.body;
+
+  if (username !== ADMIN_USER || password !== ADMIN_PASS) {
+    return res.send("Invalid login");
+  }
 
   const token = putToken();
   res.send(renderDashboardHTML(token));
 });
 
-
 // ======================
-// FIXED DASHBOARD ROUTE
+// DEVICE REGISTER
 // ======================
-
-app.get("/dashboard", (req, res) => {
-  const token = putToken();
-  res.send(renderDashboardHTML(token));
-});
-
 app.post("/register", async (req, res) => {
   const { device_id, lat, lng } = req.body;
-
-  const now = Date.now();
 
   const doc = await Device.findOneAndUpdate(
     { device_id },
@@ -174,15 +210,19 @@ app.post("/register", async (req, res) => {
       device_id,
       lat,
       lng,
-      last_seen: now,
+      last_seen: Date.now(),
       status: "online",
     },
     { upsert: true, new: true }
   );
 
+  await ensureMsgRow(device_id);
   res.json(doc);
 });
 
+// ======================
+// HEARTBEAT
+// ======================
 app.post("/heartbeat", async (req, res) => {
   const { device_id } = req.body;
 
@@ -194,6 +234,9 @@ app.post("/heartbeat", async (req, res) => {
   res.json({ ok: true });
 });
 
+// ======================
+// DEVICES
+// ======================
 app.get("/devices", async (req, res) => {
   const now = Date.now();
 
@@ -203,108 +246,204 @@ app.get("/devices", async (req, res) => {
   );
 
   const data = await Device.find();
-
   res.json(data);
 });
 
-app.post("/api/simple", requireAuth, async (req, res) => {
-  const { device_id, line1, line2 } = req.body;
+// ======================
+// JUNCTION LIST
+// ======================
+app.get("/junctions", (req, res) => {
+  res.json(JUNCTIONS);
+});
 
-  console.log("SEND:", device_id, line1, line2);
+// ======================
+// SINGLE DEVICE SEND
+// ======================
+app.post("/api/simple", requireAuth, async (req, res) => {
+  const { device_id, sig, slot, line1, line2 } = req.body;
+
+  const dev = await Device.findOne({ device_id });
+
+  if (!isDeviceOnlineRow(dev)) {
+    return res.json({ error: "Device offline" });
+  }
+
+  const doc = await ensureMsgRow(device_id);
+
+  doc.packs[sig][slot] = { l1: line1, l2: line2 };
+  doc.slot[sig] = slot;
+  doc.v++;
+  doc.updated_at = Date.now();
+
+  await doc.save();
 
   res.json({ ok: true });
 });
 
+// ======================
+// JUNCTION SEND
+// ======================
+app.post("/api/junctionSend", requireAuth, async (req, res) => {
+  const { junction, arm, sig, slot, line1, line2 } = req.body;
+
+  const j = JUNCTIONS[junction];
+
+  if (!j) return res.json({ error: "junction not found" });
+
+  let devices = [];
+
+  if (arm === "ALL") {
+    devices = Object.values(j.arms);
+  } else {
+    devices = [j.arms[arm]];
+  }
+
+  for (const device_id of devices) {
+    const dev = await Device.findOne({ device_id });
+
+    if (!isDeviceOnlineRow(dev)) continue;
+
+    const doc = await ensureMsgRow(device_id);
+
+    doc.packs[sig][slot] = { l1: line1, l2: line2 };
+    doc.slot[sig] = slot;
+    doc.v++;
+    doc.updated_at = Date.now();
+
+    await doc.save();
+  }
+
+  res.json({ ok: true });
+});
+
+// ======================
+// ESP PULL
+// ======================
+app.get("/api/pull/:device_id", async (req, res) => {
+  const doc = await ensureMsgRow(req.params.device_id);
+
+  res.json({
+    ok: true,
+    packs: doc.packs,
+    slot: doc.slot,
+    force: doc.force,
+    v: doc.v,
+  });
+});
+
+// ======================
+// DASHBOARD
+// ======================
 function renderDashboardHTML(TOKEN) {
-return `
-<!DOCTYPE html>
-<html>
-<head>
-<title>Dashboard</title>
-</head>
+  return `
+  <html>
+  <body style="font-family:Times New Roman;background:#fff7ed;padding:40px">
 
-<body style="font-family:Times New Roman">
+  <h2>Cloud Message Control</h2>
 
-<h2>Display Monitor Dashboard</h2>
+  Junction
+  <select id="junctionSel"></select>
 
-<select id="devSel"></select>
+  Arm
+  <select id="armSel"></select>
 
-<br><br>
+  <br><br>
 
-Line1
-<input id="line1"/>
+  Line1
+  <input id="line1">
 
-<br><br>
+  Line2
+  <input id="line2">
 
-Line2
-<input id="line2"/>
+  <br><br>
 
-<br><br>
+  <button onclick="send()">Send</button>
 
-<button onclick="send()">Send</button>
+  <script>
 
-<script>
+  const TOKEN="${TOKEN}"
 
-const AUTH_TOKEN="${TOKEN}"
+  async function load(){
 
-async function loadDevices(){
+    const r=await fetch("/junctions")
+    const j=await r.json()
 
-const r=await fetch("/devices")
+    const js=document.getElementById("junctionSel")
 
-const d=await r.json()
+    Object.keys(j).forEach(x=>{
+      const o=document.createElement("option")
+      o.value=x
+      o.textContent=x
+      js.appendChild(o)
+    })
 
-const sel=document.getElementById("devSel")
+    loadArms()
 
-sel.innerHTML=""
+  }
 
-d.forEach(x=>{
+  async function loadArms(){
 
-const o=document.createElement("option")
+    const r=await fetch("/junctions")
+    const j=await r.json()
 
-o.value=x.device_id
+    const armSel=document.getElementById("armSel")
 
-o.textContent=x.device_id+" ("+x.status+")"
+    armSel.innerHTML=""
 
-sel.appendChild(o)
+    const all=document.createElement("option")
+    all.value="ALL"
+    all.textContent="ALL"
+    armSel.appendChild(all)
 
-})
+    Object.keys(j[junctionSel.value].arms).forEach(a=>{
+      const o=document.createElement("option")
+      o.value=a
+      o.textContent=a
+      armSel.appendChild(o)
+    })
 
+  }
+
+  junctionSel.onchange=loadArms
+
+  async function send(){
+
+    const payload={
+      junction:junctionSel.value,
+      arm:armSel.value,
+      sig:"red",
+      slot:0,
+      line1:line1.value,
+      line2:line2.value
+    }
+
+    await fetch("/api/junctionSend",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "X-Auth-Token":TOKEN
+      },
+      body:JSON.stringify(payload)
+    })
+
+    alert("Sent")
+
+  }
+
+  load()
+
+  </script>
+
+  </body>
+  </html>
+  `;
 }
 
-async function send(){
+// ======================
+// START SERVER
+// ======================
+const PORT = 5000;
 
-const device_id=document.getElementById("devSel").value
-
-const line1=document.getElementById("line1").value
-
-const line2=document.getElementById("line2").value
-
-await fetch("/api/simple",{
-
-method:"POST",
-
-headers:{
-"Content-Type":"application/json",
-"X-Auth-Token":AUTH_TOKEN
-},
-
-body:JSON.stringify({device_id,line1,line2})
-
-})
-
-alert("Sent")
-
-}
-
-loadDevices()
-
-</script>
-
-</body>
-</html>
-`;
-}
-
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => console.log("Server started on port " + PORT));
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
+});
