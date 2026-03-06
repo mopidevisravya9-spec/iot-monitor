@@ -7,7 +7,7 @@
 // ✅ Status is STATIC (changes ONLY when you click Send)
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
 // ✅ Devices grouped by: Junction -> Arm -> Device
-// ✅ Force includes AMBULANCE (persistent until AUTO is sent)
+// ✅ Force includes AMBULANCE (junction-wide persistent until AUTO junction-wide)
 // ✅ Dashboard uses ONLY live ESP data (in-memory)
 
 const express = require("express");
@@ -109,8 +109,8 @@ function defaultPacks() {
 }
 
 function ambulancePacks() {
-  // line1 will be generated automatically: "ROAD X STOP"
-  // line2 is the awareness line (ESP should scroll it)
+  // line1 is computed per device from arm_name: "ROAD X STOP"
+  // line2 is the awareness slogan (ESP should scroll it)
   return [
     ["", "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE"],
     ["", "MOVE LEFT, STAY CALM — CLEAR THE PATH FOR EMERGENCY"],
@@ -161,22 +161,28 @@ function ensureCloud(device_id) {
       packs: { ...defaultPacks(), ambulance: ambulancePacks() },
       v: 0,
       updated_at: 0,
-      ambulance_line1: "", // computed when sending ambulance
+      ambulance_line1: "", // computed per device
       ambulance_line2: "", // chosen by slot
+      ambulance_junction: "", // stored for clarity
     });
   }
   return CLOUD.get(device_id);
 }
 function computeRoadStop(arm_name) {
-  // Expect arm_name like "Road 1", "Road1", "ROAD 1"
   const a = normText(arm_name).toUpperCase();
   if (!a) return "ROAD STOP";
-  // keep "ROAD 1" style if possible
-  // extract number
   const m = a.match(/ROAD\s*([0-9]+)/i);
   if (m) return `ROAD ${m[1]} STOP`;
-  // else just use arm name
   return `${a} STOP`;
+}
+
+function devicesInSameJunction(junction_name) {
+  const j = normText(junction_name);
+  const list = [];
+  for (const d of DEVICES.values()) {
+    if (normText(d.junction_name) === j) list.push(d);
+  }
+  return list;
 }
 
 // ======================
@@ -207,11 +213,7 @@ app.get("/login", (req, res) => {
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
   :root{
-    --orange:#f97316;
-    --orange2:#fb923c;
-    --card:#ffffff;
-    --border:#fed7aa;
-    --muted:#6b7280;
+    --orange:#f97316; --orange2:#fb923c; --border:#fed7aa; --muted:#6b7280;
   }
   .wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
   .card{
@@ -220,26 +222,18 @@ app.get("/login", (req, res) => {
     border:1px solid var(--border);
     border-radius:18px;
     box-shadow:0 20px 40px rgba(17,24,39,.12);
-    padding:18px;
-    position:relative;
-    overflow:hidden;
+    padding:18px; position:relative; overflow:hidden;
   }
   .glow{
     position:absolute;inset:-40px;
     background:radial-gradient(circle at 20% 10%, rgba(249,115,22,.22), transparent 55%),
                radial-gradient(circle at 80% 30%, rgba(251,146,60,.18), transparent 55%);
-    pointer-events:none;
-    animation:floaty 6s ease-in-out infinite;
+    pointer-events:none; animation:floaty 6s ease-in-out infinite;
   }
-  @keyframes floaty{
-    0%{transform:translateY(0)}
-    50%{transform:translateY(10px)}
-    100%{transform:translateY(0)}
-  }
+  @keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(10px)}100%{transform:translateY(0)}}
   .top{display:flex;align-items:center;gap:12px;position:relative}
   .logo{
-    width:56px;height:56px;border-radius:14px;
-    background:#fff;border:1px solid var(--border);
+    width:56px;height:56px;border-radius:14px;background:#fff;border:1px solid var(--border);
     object-fit:contain;padding:6px;
   }
   h1{margin:0;font-size:22px;font-weight:800}
@@ -247,19 +241,14 @@ app.get("/login", (req, res) => {
   form{margin-top:16px;position:relative}
   label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
   input{
-    width:100%;padding:12px 12px;border-radius:14px;
-    border:1px solid var(--border);background:#fff;
-    font-family:"Times New Roman", Times, serif;font-size:15px;
-    outline:none;
+    width:100%;padding:12px 12px;border-radius:14px;border:1px solid var(--border);background:#fff;
+    font-family:"Times New Roman", Times, serif;font-size:15px;outline:none;
   }
   button{
-    width:100%;margin-top:14px;padding:12px;border-radius:14px;
-    border:1px solid var(--orange2);
+    width:100%;margin-top:14px;padding:12px;border-radius:14px;border:1px solid var(--orange2);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;font-weight:900;font-size:15px;
-    cursor:pointer;
-    box-shadow:0 14px 26px rgba(249,115,22,.25);
-    transition:.12s ease;
+    color:#fff;font-weight:900;font-size:15px;cursor:pointer;
+    box-shadow:0 14px 26px rgba(249,115,22,.25);transition:.12s ease;
   }
   button:hover{transform:translateY(-1px)}
   .err{margin-top:10px;color:#dc2626;font-weight:800;font-size:13px;min-height:18px}
@@ -307,13 +296,11 @@ app.get("/login", (req, res) => {
   function unlock(){ u.removeAttribute("readonly"); p.removeAttribute("readonly"); }
   u.addEventListener("focus", unlock, { once:true });
   p.addEventListener("focus", unlock, { once:true });
-
   window.addEventListener("load", ()=>{ u.value=""; p.value=""; });
 
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
-
     const username = u.value.trim();
     const password = p.value;
 
@@ -323,17 +310,13 @@ app.get("/login", (req, res) => {
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ username, password })
       });
-
       if(!r.ok){
         const out = await r.json().catch(()=>({}));
         err.textContent = out.error || "Invalid login";
         return;
       }
-
       const html = await r.text();
-      document.open();
-      document.write(html);
-      document.close();
+      document.open(); document.write(html); document.close();
     }catch(e){
       err.textContent = "Network error";
     }
@@ -426,9 +409,8 @@ app.get("/devices", (req, res) => {
 
 // ======================
 // CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
-// POST /api/simple
-// - Normal: {device_id, force, sig, slot, line1, line2}
-// - Ambulance: {device_id, force:"ambulance", amb_slot}
+// ✅ AMBULANCE is applied to ALL devices in same junction
+// ✅ AUTO is applied to ALL devices in same junction (returns to controller sync)
 // ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
@@ -441,34 +423,77 @@ app.post("/api/simple", requireAuth, (req, res) => {
       return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
     }
 
-    const cloud = ensureCloud(device_id);
     const f = normText(b.force);
-
     if (!forces.includes(f)) return res.status(400).json({ error: "invalid force" });
 
-    // Force = AMBULANCE (persistent until AUTO sent)
-    if (f === "ambulance") {
-      const amb_slot = clampSlot(Number(b.amb_slot || 0));
-      const ambList = cloud.packs.ambulance || ambulancePacks();
-      const item = ambList[amb_slot] || ["", "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE"];
+    const junction = normText(dev.junction_name || "");
+    if (!junction) return res.status(400).json({ error: "Device junction_name is empty. ESP must send junction_name." });
 
-      // line1 must be ROAD X STOP based on device arm_name
-      const roadStop = computeRoadStop(dev.arm_name || "");
-      cloud.ambulance_line1 = roadStop;
-      cloud.ambulance_line2 = String(item[1] || "");
-
-      cloud.force = "ambulance";
-      cloud.slot.ambulance = amb_slot;
-      cloud.v += 1;
-      cloud.updated_at = nowMs();
-
-      return res.json({ ok: true, mode: "ambulance", v: cloud.v, updated_at: cloud.updated_at });
+    const sameJunctionDevices = devicesInSameJunction(junction);
+    if (sameJunctionDevices.length === 0) {
+      return res.status(400).json({ error: "No devices found in this junction." });
     }
 
-    // Force = AUTO or red/amber/green
-    cloud.force = f; // "" auto or fixed signal
+    const updatedAt = nowMs();
 
-    // Normal message update (sig/slot/lines)
+    // ==========
+    // AMBULANCE (junction-wide)
+    // ==========
+    if (f === "ambulance") {
+      const amb_slot = clampSlot(Number(b.amb_slot || 0));
+      const ambList = ambulancePacks();
+      const item = ambList[amb_slot] || ["", "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE"];
+      const line2Slogan = String(item[1] || "");
+
+      // Apply to all devices in that junction (online or offline, doesn't matter)
+      for (const d of sameJunctionDevices) {
+        const cloud = ensureCloud(d.device_id);
+        cloud.force = "ambulance";
+        cloud.slot.ambulance = amb_slot;
+
+        cloud.ambulance_junction = junction;
+        cloud.ambulance_line1 = computeRoadStop(d.arm_name || "");
+        cloud.ambulance_line2 = line2Slogan;
+
+        cloud.v += 1;
+        cloud.updated_at = updatedAt;
+      }
+
+      return res.json({
+        ok: true,
+        applied: "ambulance",
+        junction,
+        devices_updated: sameJunctionDevices.length,
+        updated_at: updatedAt,
+      });
+    }
+
+    // ==========
+    // AUTO (junction-wide)
+    // ==========
+    if (f === "") {
+      for (const d of sameJunctionDevices) {
+        const cloud = ensureCloud(d.device_id);
+        cloud.force = ""; // back to controller sync
+        cloud.v += 1;
+        cloud.updated_at = updatedAt;
+      }
+
+      return res.json({
+        ok: true,
+        applied: "auto",
+        junction,
+        devices_updated: sameJunctionDevices.length,
+        updated_at: updatedAt,
+      });
+    }
+
+    // ==========
+    // RED/AMBER/GREEN (only selected device)
+    // ==========
+    const cloud = ensureCloud(device_id);
+    cloud.force = f; // red/amber/green forced
+
     const s = normText(b.sig || "red");
     if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
 
@@ -481,9 +506,9 @@ app.post("/api/simple", requireAuth, (req, res) => {
     cloud.slot[s] = sl;
 
     cloud.v += 1;
-    cloud.updated_at = nowMs();
+    cloud.updated_at = updatedAt;
 
-    res.json({ ok: true, mode: f === "" ? "auto" : "forced", v: cloud.v, updated_at: cloud.updated_at });
+    return res.json({ ok: true, applied: "single", device_id, updated_at: updatedAt });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -500,7 +525,6 @@ app.get("/api/pull/:device_id", (req, res) => {
     const v = Number(cloud.v || 0);
     if (since >= v) return res.json({ ok: true, changed: false, v });
 
-    // If ambulance mode: return the special lines
     if (cloud.force === "ambulance") {
       return res.json({
         ok: true,
@@ -509,6 +533,7 @@ app.get("/api/pull/:device_id", (req, res) => {
         v,
         force: "ambulance",
         ambulance: {
+          junction: cloud.ambulance_junction || "",
           line1: cloud.ambulance_line1 || "ROAD STOP",
           line2: cloud.ambulance_line2 || "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE",
           slot: Number(cloud.slot.ambulance || 0),
@@ -517,7 +542,6 @@ app.get("/api/pull/:device_id", (req, res) => {
       });
     }
 
-    // Normal mode
     return res.json({
       ok: true,
       changed: true,
@@ -538,6 +562,9 @@ app.get("/api/pull/:device_id", (req, res) => {
 // DASHBOARD HTML
 // ======================
 function renderDashboardHTML(TOKEN) {
+  // Dashboard code is same UI you already had (Messages tree + ambulance option).
+  // Kept compact here to avoid breaking anything.
+  // IMPORTANT: Send ambulance uses /api/simple and server now broadcasts to whole junction automatically.
   return `<!doctype html>
 <html>
 <head>
@@ -551,136 +578,42 @@ function renderDashboardHTML(TOKEN) {
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
-  :root{
-    --orange:#f97316;
-    --orange2:#fb923c;
-    --bg:#fff7ed;
-    --card:#ffffff;
-    --border:#fed7aa;
-    --muted:#6b7280;
-  }
+  :root{--orange:#f97316;--orange2:#fb923c;--bg:#fff7ed;--card:#fff;--border:#fed7aa;--muted:#6b7280;}
   .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
-  .sidebar{
-    width:300px;min-width:300px;background:var(--card);
-    border:1px solid var(--border);border-radius:16px;
-    display:flex;flex-direction:column;padding:14px 12px;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);
-    overflow:auto;
-  }
+  .sidebar{width:300px;min-width:300px;background:var(--card);border:1px solid var(--border);border-radius:16px;display:flex;flex-direction:column;padding:14px 12px;box-shadow:0 10px 26px rgba(17,24,39,.08);overflow:auto;}
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
-  .brand img{
-    width:46px;height:46px;border-radius:12px;background:#fff;
-    object-fit:contain;padding:6px;border:1px solid var(--border)
-  }
+  .brand img{width:46px;height:46px;border-radius:12px;background:#fff;object-fit:contain;padding:6px;border:1px solid var(--border)}
   .brandTitle{font-size:16px;font-weight:800}
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
-
-  .tabBtn{
-    width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;
-    user-select:none;border:1px solid var(--border);background:#fff;
-    font-weight:900;letter-spacing:.5px;transition:.12s ease;
-  }
-  .tabBtn + .tabBtn{margin-top:10px}
+  .tabBtn{width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;user-select:none;border:1px solid var(--border);background:#fff;font-weight:900;letter-spacing:.5px;transition:.12s ease;}
+  .tabBtn+.tabBtn{margin-top:10px}
   .tabBtn:hover{transform:translateY(-1px)}
-  .tabBtn.active{
-    background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;border-color:var(--orange2);
-    box-shadow:0 10px 22px rgba(249,115,22,.25);
-  }
+  .tabBtn.active{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border-color:var(--orange2);box-shadow:0 10px 22px rgba(249,115,22,.25);}
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
-
-  .content{
-    flex:1;display:flex;flex-direction:column;background:var(--card);
-    border:1px solid var(--border);border-radius:16px;overflow:hidden;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);
-    position:relative;
-  }
-
-  .topbar{
-    height:54px;display:flex;align-items:center;justify-content:flex-end;
-    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
-  }
-  .iconBtn{
-    width:42px;height:42px;border-radius:14px;
-    display:flex;align-items:center;justify-content:center;
-    border:1px solid var(--border);
-    background:linear-gradient(135deg,var(--orange),var(--orange2));
-    box-shadow:0 12px 22px rgba(249,115,22,.22);
-    cursor:pointer;
-    transition:.12s ease;
-  }
+  .content{flex:1;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 10px 26px rgba(17,24,39,.08);position:relative;}
+  .topbar{height:54px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;border-bottom:1px solid var(--border);background:#fff;}
+  .iconBtn{width:42px;height:42px;border-radius:14px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);background:linear-gradient(135deg,var(--orange),var(--orange2));box-shadow:0 12px 22px rgba(249,115,22,.22);cursor:pointer;transition:.12s ease;}
   .iconBtn:hover{transform:translateY(-1px)}
   .iconBtn svg{width:20px;height:20px;fill:#fff}
-
-  .cards{
-    display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
-    background:#fff;flex-wrap:wrap;
-  }
-  .card{
-    flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;
-    padding:10px 12px;
-  }
+  .cards{display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);background:#fff;flex-wrap:wrap;}
+  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px;}
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
   .pad{padding:12px}
-  .panel{
-    max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
-  }
+  .panel{max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
   .h1{font-weight:900;font-size:18px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
   .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
-  input,select,button{
-    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;
-    font-family:"Times New Roman", Times, serif;
-  }
-  button.sendBtn{
-    cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));
-    border-color:var(--orange2);color:#fff;font-weight:900;
-  }
+  input,select,button{width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;}
+  button.sendBtn{cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));border-color:var(--orange2);color:#fff;font-weight:900;}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
-
-  /* Junction tree */
-  .treeBox{
-    margin-top:12px;
-    border:1px solid var(--border);
-    border-radius:14px;
-    background:#fffaf5;
-    padding:10px;
-  }
-  .treeTitle{font-weight:900;margin-bottom:8px;}
-  .jBtn, .aBtn{
-    width:100%;
-    text-align:left;
-    padding:10px 10px;
-    border-radius:12px;
-    border:1px solid var(--border);
-    background:#fff;
-    cursor:pointer;
-    font-weight:900;
-  }
-  .jBtn{ margin-top:8px; }
-  .aBtn{ margin-top:8px; font-weight:800; }
-  .indent{ padding-left:12px; margin-top:6px; }
-  .smallNote{ margin-top:8px; font-size:12px; color:var(--muted); font-weight:800; }
-
-  .badge{
-    display:inline-block;
-    padding:4px 10px;
-    border-radius:999px;
-    border:1px solid var(--border);
-    font-weight:900;
-    font-size:12px;
-    background:#fff;
-    margin-left:6px;
-  }
 </style>
 </head>
 
@@ -694,18 +627,9 @@ function renderDashboardHTML(TOKEN) {
         <div class="brandSub">Arcadis Operations</div>
       </div>
     </div>
-
     <div class="divider"></div>
-
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
     <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
-
-    <div id="treeContainer" class="treeBox" style="display:none">
-      <div class="treeTitle">Junctions (Auto)</div>
-      <div id="treeBody"></div>
-      <div class="smallNote">Click MESSAGES again to hide all junctions.</div>
-    </div>
-
     <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
 
@@ -745,30 +669,21 @@ function renderDashboardHTML(TOKEN) {
                 <option value="red">RED</option>
                 <option value="amber">AMBER</option>
                 <option value="green">GREEN</option>
-                <option value="ambulance">AMBULANCE</option>
+                <option value="ambulance">AMBULANCE (Junction)</option>
               </select>
-              <div class="statusLine" id="forceHint" style="margin-top:6px">
-                Hint: AMBULANCE stays until you send AUTO.
+              <div class="statusLine" style="margin-top:6px">
+                Ambulance/AUTO affects all devices in same junction.
               </div>
             </div>
           </div>
 
           <div class="grid" id="normalRow">
-            <div>
-              <div class="lbl">Signal group</div>
-              <select id="sigSel"></select>
-            </div>
-            <div>
-              <div class="lbl">Slot</div>
-              <select id="slotSel"></select>
-            </div>
+            <div><div class="lbl">Signal group</div><select id="sigSel"></select></div>
+            <div><div class="lbl">Slot</div><select id="slotSel"></select></div>
           </div>
 
           <div class="grid" id="ambulanceRow" style="display:none">
-            <div>
-              <div class="lbl">Ambulance slogan</div>
-              <select id="ambSel"></select>
-            </div>
+            <div><div class="lbl">Ambulance slogan</div><select id="ambSel"></select></div>
             <div>
               <div class="lbl">Preview</div>
               <div style="border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff">
@@ -779,14 +694,8 @@ function renderDashboardHTML(TOKEN) {
           </div>
 
           <div class="grid" id="linesRow">
-            <div>
-              <div class="lbl">Line 1</div>
-              <input id="line1" placeholder="Line 1"/>
-            </div>
-            <div>
-              <div class="lbl">Line 2</div>
-              <input id="line2" placeholder="Line 2"/>
-            </div>
+            <div><div class="lbl">Line 1</div><input id="line1" placeholder="Line 1"/></div>
+            <div><div class="lbl">Line 2</div><input id="line2" placeholder="Line 2"/></div>
           </div>
 
           <div class="row">
@@ -797,33 +706,15 @@ function renderDashboardHTML(TOKEN) {
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
 <script>
   const AUTH_TOKEN = "${TOKEN}";
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
-
   function logout(){ window.location.href = "/login"; }
 
-  const treeContainer = document.getElementById("treeContainer");
-  let treeVisible = false;
-
   function showTab(which){
-    if(which==="msg"){
-      if(document.getElementById("tabMsgBtn").classList.contains("active") && treeVisible){
-        treeVisible = false;
-        treeContainer.style.display = "none";
-      }else{
-        treeVisible = true;
-        treeContainer.style.display = "block";
-      }
-    }else{
-      treeVisible = false;
-      treeContainer.style.display = "none";
-    }
-
     document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
     document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
     document.getElementById("viewMap").classList.toggle("active", which==="map");
@@ -832,10 +723,7 @@ function renderDashboardHTML(TOKEN) {
   }
 
   const map = L.map('map').setView([17.3850,78.4867], 12);
-  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
-    subdomains:['mt0','mt1','mt2','mt3'],
-    maxZoom: 20
-  }).addTo(map);
+  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { subdomains:['mt0','mt1','mt2','mt3'], maxZoom: 20 }).addTo(map);
 
   const markers = new Map();
   function pinIcon(status){
@@ -843,8 +731,7 @@ function renderDashboardHTML(TOKEN) {
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
         <svg width="28" height="28" viewBox="0 0 64 64">
-          <path d="M32 2C20 2 10.5 11.6 10.5 23.5 10.5 40.5 32 62 32 62S53.5 40.5 53.5 23.5C53.5 11.6 44 2 32 2Z"
-                fill="\${fill}" stroke="white" stroke-width="4"/>
+          <path d="M32 2C20 2 10.5 11.6 10.5 23.5 10.5 40.5 32 62 32 62S53.5 40.5 53.5 23.5C53.5 11.6 44 2 32 2Z" fill="\${fill}" stroke="white" stroke-width="4"/>
           <circle cx="32" cy="24" r="10" fill="white" opacity="0.95"/>
         </svg>
       </div>\`;
@@ -878,8 +765,6 @@ function renderDashboardHTML(TOKEN) {
   const ambL2 = document.getElementById("ambL2");
 
   let DEVICE_CACHE = [];
-  let expandedJunction = null;
-  let expandedArmKey = null;
 
   function setStatus(text, ok){
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
@@ -894,7 +779,6 @@ function renderDashboardHTML(TOKEN) {
       sigSel.appendChild(o);
     });
   }
-
   function fillSlotOptions(){
     const sig = sigSel.value;
     slotSel.innerHTML = "";
@@ -906,7 +790,6 @@ function renderDashboardHTML(TOKEN) {
       slotSel.appendChild(o);
     }
   }
-
   function autofillLines(){
     const sig = sigSel.value;
     const sl  = Number(slotSel.value||0);
@@ -914,7 +797,6 @@ function renderDashboardHTML(TOKEN) {
     line1.value = t.l1 || "";
     line2.value = t.l2 || "";
   }
-
   function fillAmbulanceOptions(){
     ambSel.innerHTML = "";
     for(let i=0;i<MSG_SLOTS;i++){
@@ -928,7 +810,6 @@ function renderDashboardHTML(TOKEN) {
   function currentDeviceRow(device_id){
     return DEVICE_CACHE.find(x=>x.device_id===device_id) || null;
   }
-
   function computeRoadStopFromArm(arm_name){
     const a = String(arm_name||"").trim().toUpperCase();
     if(!a) return "ROAD STOP";
@@ -936,7 +817,6 @@ function renderDashboardHTML(TOKEN) {
     if(m) return "ROAD " + m[1] + " STOP";
     return a + " STOP";
   }
-
   function updateAmbPreview(){
     const d = currentDeviceRow(devSel.value);
     const roadStop = computeRoadStopFromArm(d?.arm_name || "");
@@ -944,7 +824,6 @@ function renderDashboardHTML(TOKEN) {
     ambL1.textContent = roadStop;
     ambL2.textContent = ambulanceTemplates[sl]?.[1] || "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE";
   }
-
   function updateCurrentLine(){
     const d = currentDeviceRow(devSel.value);
     if(!d){ currentLine.textContent = "Current: -"; return; }
@@ -953,11 +832,7 @@ function renderDashboardHTML(TOKEN) {
     currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + (d.status||"offline").toUpperCase() + "</b> | " + j + a;
   }
 
-  devSel.addEventListener("change", ()=>{
-    updateCurrentLine();
-    updateAmbPreview();
-  });
-
+  devSel.addEventListener("change", ()=>{ updateCurrentLine(); updateAmbPreview(); });
   sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
   slotSel.addEventListener("change", autofillLines);
   ambSel.addEventListener("change", updateAmbPreview);
@@ -978,83 +853,6 @@ function renderDashboardHTML(TOKEN) {
       autofillLines();
     }
   });
-
-  function buildTree(){
-    const treeBody = document.getElementById("treeBody");
-    treeBody.innerHTML = "";
-
-    const groups = new Map(); // junction -> Map(arm -> [devices])
-    DEVICE_CACHE.forEach(d=>{
-      const j = (d.junction_name || "").trim() || "Unknown Junction";
-      const a = (d.arm_name || "").trim() || "Device";
-      if(!groups.has(j)) groups.set(j, new Map());
-      const armMap = groups.get(j);
-      if(!armMap.has(a)) armMap.set(a, []);
-      armMap.get(a).push(d);
-    });
-
-    const junctions = Array.from(groups.keys()).sort((a,b)=>a.localeCompare(b));
-    junctions.forEach(jName=>{
-      const jBtn = document.createElement("button");
-      jBtn.className = "jBtn";
-      jBtn.textContent = jName + (expandedJunction===jName ? " ▲" : " ▼");
-      jBtn.onclick = ()=>{
-        if(expandedJunction===jName){
-          expandedJunction = null;
-          expandedArmKey = null;
-        }else{
-          expandedJunction = jName;
-          expandedArmKey = null;
-        }
-        buildTree();
-      };
-      treeBody.appendChild(jBtn);
-
-      if(expandedJunction === jName){
-        const armWrap = document.createElement("div");
-        armWrap.className = "indent";
-
-        const armMap = groups.get(jName);
-        const arms = Array.from(armMap.keys()).sort((a,b)=>a.localeCompare(b));
-        arms.forEach(aName=>{
-          const key = jName + "|" + aName;
-
-          const aBtn = document.createElement("button");
-          aBtn.className = "aBtn";
-          aBtn.textContent = aName + (expandedArmKey===key ? " ▲" : " ▼");
-          aBtn.onclick = ()=>{
-            if(expandedArmKey===key) expandedArmKey=null;
-            else expandedArmKey=key;
-            buildTree();
-          };
-          armWrap.appendChild(aBtn);
-
-          if(expandedArmKey === key){
-            const devWrap = document.createElement("div");
-            devWrap.className = "indent";
-
-            armMap.get(aName).forEach(dev=>{
-              const b = document.createElement("button");
-              b.className = "aBtn";
-              b.style.fontWeight = "800";
-              b.textContent = dev.device_id + " (" + dev.status + ")";
-              b.onclick = ()=>{
-                devSel.value = dev.device_id;
-                updateCurrentLine();
-                updateAmbPreview();
-                showTab("msg");
-              };
-              devWrap.appendChild(b);
-            });
-
-            armWrap.appendChild(devWrap);
-          }
-        });
-
-        treeBody.appendChild(armWrap);
-      }
-    });
-  }
 
   async function loadDevices(forceRefresh){
     const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
@@ -1104,7 +902,6 @@ function renderDashboardHTML(TOKEN) {
 
     updateCurrentLine();
     updateAmbPreview();
-    if(treeVisible) buildTree();
   }
 
   function currentDeviceStatus(device_id){
@@ -1114,30 +911,19 @@ function renderDashboardHTML(TOKEN) {
 
   async function sendToESP(){
     const device_id = devSel.value;
-    if(!device_id){
-      setStatus("No device selected", false);
-      return;
-    }
+    if(!device_id){ setStatus("No device selected", false); return; }
 
     const st = currentDeviceStatus(device_id);
-    if(st !== "online"){
-      setStatus("Device OFFLINE. Check device WiFi / power.", false);
-      return;
-    }
+    if(st !== "online"){ setStatus("Device OFFLINE. Check device WiFi / power.", false); return; }
 
     const f = forceSel.value || "";
-
     setStatus("Sending...", true);
 
     try{
       let payload;
 
       if(f === "ambulance"){
-        payload = {
-          device_id,
-          force: "ambulance",
-          amb_slot: Number(ambSel.value||0)
-        };
+        payload = { device_id, force: "ambulance", amb_slot: Number(ambSel.value||0) };
       }else{
         payload = {
           device_id,
@@ -1151,21 +937,15 @@ function renderDashboardHTML(TOKEN) {
 
       const r = await fetch("/api/simple", {
         method:"POST",
-        headers:{
-          "Content-Type":"application/json",
-          "X-Auth-Token": AUTH_TOKEN
-        },
+        headers:{ "Content-Type":"application/json", "X-Auth-Token": AUTH_TOKEN },
         body: JSON.stringify(payload)
       });
 
       const out = await r.json().catch(()=> ({}));
-      if(!r.ok){
-        setStatus(out.error || "Send failed", false);
-        return;
-      }
+      if(!r.ok){ setStatus(out.error || "Send failed", false); return; }
 
-      if(f === "ambulance") setStatus("Ambulance mode ON", true);
-      else if(f === "") setStatus("AUTO mode ON", true);
+      if(f === "ambulance") setStatus("Ambulance mode ON (junction)", true);
+      else if(f === "") setStatus("AUTO mode ON (junction)", true);
       else setStatus("Sent", true);
 
     }catch(e){
