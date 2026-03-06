@@ -1,16 +1,3 @@
-// server.js ✅ FULL WORKING (NO DATABASE)
-// LIGHT ORANGE+WHITE + TIMES NEW ROMAN
-// ✅ Login page
-// ✅ No MongoDB
-// ✅ Dashboard uses ONLY live ESP JSON data
-// ✅ No duplicate DB rows
-// ✅ Junction -> device tree from heartbeat JSON only
-// ✅ Clicking device selects that ESP only
-// ✅ Send message to selected ESP only
-// ✅ Refresh -> login
-// ✅ Logout icon top-right
-// ✅ Static status (changes only when Send is clicked)
-
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
@@ -70,10 +57,20 @@ const MSG_SLOTS = 5;
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-// DEVICES = only what ESP sends live
-// CLOUD   = message state per live device
-const DEVICES = new Map(); // key: device_id
-const CLOUD = new Map();   // key: device_id
+const DEVICES = new Map(); // key = final device_id shown in dashboard
+const CLOUD = new Map();   // key = same device_id
+
+function safeText(v) {
+  return String(v || "").trim();
+}
+function normJunction(v) {
+  const x = safeText(v);
+  return x || "Junction Not Sent";
+}
+function normArm(v) {
+  const x = safeText(v);
+  return x || "Road";
+}
 
 function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
@@ -110,6 +107,16 @@ function defaultPacks() {
   };
 }
 
+function ambulanceSlogans() {
+  return [
+    "GIVE WAY TO AMBULANCE — EVERY SECOND CAN SAVE A LIFE",
+    "CLEAR THE ROAD — AN AMBULANCE CARRIES HOPE",
+    "DON'T BLOCK THE WAY — SOMEONE NEEDS URGENT HELP",
+    "MAKE SPACE FOR AMBULANCE — LIFE MUST MOVE FIRST",
+    "YOUR ONE MOVE CAN GIVE SOMEONE ANOTHER CHANCE TO LIVE"
+  ];
+}
+
 const signals = ["red", "amber", "green", "no"];
 
 function clampSlot(n) {
@@ -137,7 +144,7 @@ function ensureCloudRow(device_id) {
       slot: { red: 0, amber: 0, green: 0, no: 0 },
       packs: defaultPacks(),
       v: 0,
-      updated_at: 0,
+      updated_at: 0
     });
   }
   return CLOUD.get(device_id);
@@ -229,9 +236,7 @@ app.get("/login", (req, res) => {
     color:#fff;font-weight:900;font-size:15px;
     cursor:pointer;
     box-shadow:0 14px 26px rgba(249,115,22,.25);
-    transition:.12s ease;
   }
-  button:hover{transform:translateY(-1px)}
   .err{margin-top:10px;color:#dc2626;font-weight:800;font-size:13px;min-height:18px}
   .footer{margin-top:14px;color:var(--muted);font-size:12px;font-weight:800}
 </style>
@@ -326,71 +331,63 @@ app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // REGISTER / HEARTBEAT
-// ONLY LIVE ESP DATA
-// Expected JSON:
-// {
-//   "device_id": "Road 1",
-//   "junction_name": "Rasoolpura",
-//   "arm_name": "Road 1",
-//   "lat": 17.4471,
-//   "lng": 78.4773
-// }
+// accepts:
+// junction OR junction_name
+// arm_name optional
+// device_id becomes display device if arm missing
+// if arm_name exists, dashboard displays arm_name instead of ESP_001
 // ======================
-app.post("/register", (req, res) => {
+function upsertLiveDevice(req, res) {
   try {
-    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
+    const body = req.body || {};
 
-    const d = {
-      device_id: String(device_id || "").trim(),
-      junction_name: String(junction_name || "").trim(),
-      arm_name: String(arm_name || "").trim(),
-      lat: Number(lat || 0),
-      lng: Number(lng || 0),
+    const rawDeviceId = safeText(body.device_id);
+    if (!rawDeviceId) return res.status(400).json({ error: "device_id required" });
+
+    const jn = safeText(body.junction_name || body.junction);
+    const arm = safeText(body.arm_name);
+
+    // Final display device name:
+    // if arm_name exists -> use it
+    // else use device_id
+    const finalDeviceId = arm || rawDeviceId;
+
+    const old = DEVICES.get(finalDeviceId) || {};
+    const next = {
+      device_id: finalDeviceId,
+      raw_device_id: rawDeviceId,
+      junction_name: normJunction(jn || old.junction_name),
+      arm_name: normArm(arm || old.arm_name || finalDeviceId),
+      lat: body.lat !== undefined ? Number(body.lat || 0) : Number(old.lat || 0),
+      lng: body.lng !== undefined ? Number(body.lng || 0) : Number(old.lng || 0),
       last_seen: Date.now(),
       status: "online"
     };
 
-    DEVICES.set(d.device_id, d);
-    ensureCloudRow(d.device_id);
+    // remove old raw entry if raw id and final id differ
+    if (rawDeviceId !== finalDeviceId) {
+      DEVICES.delete(rawDeviceId);
+      if (CLOUD.has(rawDeviceId) && !CLOUD.has(finalDeviceId)) {
+        CLOUD.set(finalDeviceId, CLOUD.get(rawDeviceId));
+      }
+      CLOUD.delete(rawDeviceId);
+    }
+
+    DEVICES.set(finalDeviceId, next);
+    ensureCloudRow(finalDeviceId);
     cleanDeadDevices();
 
-    res.json({ ok: true, device: d });
+    res.json({ ok: true, device: next });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
-});
+}
 
-app.post("/heartbeat", (req, res) => {
-  try {
-    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
-
-    const old = DEVICES.get(String(device_id).trim()) || {};
-
-    const d = {
-      device_id: String(device_id || "").trim(),
-      junction_name: String(junction_name !== undefined ? junction_name : old.junction_name || "").trim(),
-      arm_name: String(arm_name !== undefined ? arm_name : old.arm_name || "").trim(),
-      lat: lat !== undefined ? Number(lat || 0) : Number(old.lat || 0),
-      lng: lng !== undefined ? Number(lng || 0) : Number(old.lng || 0),
-      last_seen: Date.now(),
-      status: "online"
-    };
-
-    DEVICES.set(d.device_id, d);
-    ensureCloudRow(d.device_id);
-    cleanDeadDevices();
-
-    res.json({ ok: true, device: d });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
+app.post("/register", upsertLiveDevice);
+app.post("/heartbeat", upsertLiveDevice);
 
 // ======================
 // DEVICES LIST
-// ONLY LIVE MEMORY
 // ======================
 app.get("/devices", (req, res) => {
   try {
@@ -400,8 +397,8 @@ app.get("/devices", (req, res) => {
     for (const d of DEVICES.values()) {
       out.push({
         device_id: d.device_id,
-        junction_name: d.junction_name || "Unknown Junction",
-        arm_name: d.arm_name || "",
+        junction_name: normJunction(d.junction_name),
+        arm_name: normArm(d.arm_name),
         lat: Number(d.lat || 0),
         lng: Number(d.lng || 0),
         last_seen: Number(d.last_seen || 0),
@@ -423,25 +420,62 @@ app.get("/devices", (req, res) => {
 });
 
 // ======================
-// SEND MESSAGE TO SELECTED ESP ONLY
+// SEND MESSAGE
+// red/amber/green keep old ESP structure
+// ambulance sent as RED-compatible packet
 // ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
-    const { device_id, force, sig, slot, line1, line2 } = req.body || {};
+    const { device_id, force, sig, slot, line1, line2, amb_slot } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
-    const dev = DEVICES.get(String(device_id).trim());
+    const key = safeText(device_id);
+    const dev = DEVICES.get(key);
     if (!isLiveOnline(dev)) {
       return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
     }
 
-    const doc = ensureCloudRow(String(device_id).trim());
+    const doc = ensureCloudRow(key);
     const now = Date.now();
-
     const f = String(force || "");
-    if (!(f === "" || f === "red" || f === "amber" || f === "green")) {
+
+    if (!(f === "" || f === "red" || f === "amber" || f === "green" || f === "ambulance")) {
       return res.status(400).json({ error: "invalid force" });
     }
+
+    if (f === "") {
+      doc.force = "";
+      doc.v = Number(doc.v || 0) + 1;
+      doc.updated_at = now;
+      CLOUD.set(key, doc);
+      return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+    }
+
+    if (f === "ambulance") {
+      const idx = clampSlot(Number(amb_slot || 0));
+      const slogans = ambulanceSlogans();
+
+      // compatibility with old ESP:
+      // use RED force and RED slot
+      doc.force = "red";
+
+      const packs = doc.packs || defaultPacks();
+      packs.red = normalizePack(packs.red);
+
+      packs.red[idx] = {
+        l1: safeText(dev.device_id) + " STOP",
+        l2: slogans[idx] || slogans[0]
+      };
+
+      doc.packs = packs;
+      doc.slot.red = idx;
+      doc.v = Number(doc.v || 0) + 1;
+      doc.updated_at = now;
+
+      CLOUD.set(key, doc);
+      return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+    }
+
     doc.force = f;
 
     const s = String(sig || "red");
@@ -463,8 +497,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
 
-    CLOUD.set(doc.device_id, doc);
-
+    CLOUD.set(key, doc);
     res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -473,14 +506,17 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
 // ======================
 // ESP PULL
-// OLD WORKING FORMAT
+// old working format
 // ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
-    const device_id = String(req.params.device_id || "").trim();
+    const raw = safeText(req.params.device_id);
+
+    // if Road 1 is stored, use Road 1
+    const key = DEVICES.has(raw) ? raw : raw;
     const since = Number(req.query.since || 0);
 
-    const doc = ensureCloudRow(device_id);
+    const doc = ensureCloudRow(key);
     const v = Number(doc.v || 0);
 
     if (since >= v) return res.json({ ok: true, changed: false, v });
@@ -488,7 +524,7 @@ app.get("/api/pull/:device_id", (req, res) => {
     res.json({
       ok: true,
       changed: true,
-      device_id,
+      device_id: key,
       v,
       force: doc.force || "",
       slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
@@ -554,7 +590,6 @@ function renderDashboardHTML(TOKEN) {
     color:#fff;border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
-
   .treeBox{
     margin-top:12px;border:1px solid var(--border);border-radius:14px;
     background:#fffaf5;padding:10px;
@@ -568,7 +603,6 @@ function renderDashboardHTML(TOKEN) {
   .dBtn{margin-top:8px;font-weight:800}
   .indent{padding-left:12px;margin-top:6px}
   .smallNote{margin-top:8px;font-size:12px;color:var(--muted);font-weight:800}
-
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
 
   .content{
@@ -577,7 +611,6 @@ function renderDashboardHTML(TOKEN) {
     box-shadow:0 10px 26px rgba(17,24,39,.08);
     position:relative;
   }
-
   .topbar{
     height:54px;display:flex;align-items:center;justify-content:flex-end;
     padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
@@ -589,9 +622,7 @@ function renderDashboardHTML(TOKEN) {
     background:linear-gradient(135deg,var(--orange),var(--orange2));
     box-shadow:0 12px 22px rgba(249,115,22,.22);
     cursor:pointer;
-    transition:.12s ease;
   }
-  .iconBtn:hover{transform:translateY(-1px)}
   .iconBtn svg{width:20px;height:20px;fill:#fff}
 
   .cards{
@@ -685,16 +716,11 @@ function renderDashboardHTML(TOKEN) {
             </div>
             <div>
               <div class="lbl">Force</div>
-              <select id="forceSel">
-                <option value="">AUTO</option>
-                <option value="red">RED</option>
-                <option value="amber">AMBER</option>
-                <option value="green">GREEN</option>
-              </select>
+              <select id="forceSel"></select>
             </div>
           </div>
 
-          <div class="grid">
+          <div class="grid" id="normalGrid">
             <div>
               <div class="lbl">Signal group</div>
               <select id="sigSel"></select>
@@ -705,7 +731,18 @@ function renderDashboardHTML(TOKEN) {
             </div>
           </div>
 
-          <div class="grid">
+          <div class="grid" id="ambulanceGrid" style="display:none">
+            <div>
+              <div class="lbl">Ambulance slogan</div>
+              <select id="ambSel"></select>
+            </div>
+            <div>
+              <div class="lbl">Preview</div>
+              <input id="ambPreview" readonly />
+            </div>
+          </div>
+
+          <div class="grid" id="lineGrid">
             <div>
               <div class="lbl">Line 1</div>
               <input id="line1" placeholder="Line 1"/>
@@ -729,6 +766,7 @@ function renderDashboardHTML(TOKEN) {
 
 <script>
   const AUTH_TOKEN = "${TOKEN}";
+  const ambulanceSlogans = ${JSON.stringify(ambulanceSlogans())};
   try { history.replaceState({}, "", "/dashboard"); } catch(e) {}
 
   const tabMapBtn = document.getElementById("tabMapBtn");
@@ -747,6 +785,12 @@ function renderDashboardHTML(TOKEN) {
   const statusTxt = document.getElementById("statusTxt");
   const currentLine = document.getElementById("currentLine");
   const sendBtn = document.getElementById("sendBtn");
+
+  const normalGrid = document.getElementById("normalGrid");
+  const ambulanceGrid = document.getElementById("ambulanceGrid");
+  const lineGrid = document.getElementById("lineGrid");
+  const ambSel = document.getElementById("ambSel");
+  const ambPreview = document.getElementById("ambPreview");
 
   let DEVICE_CACHE = [];
   let treeVisible = false;
@@ -825,9 +869,23 @@ function renderDashboardHTML(TOKEN) {
       currentLine.textContent = "Current: -";
       return;
     }
-    const j = d.junction_name || "Unknown Junction";
-    const a = d.arm_name ? (" | " + d.arm_name) : "";
-    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + (d.status || "offline").toUpperCase() + "</b> | " + j + a;
+    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + d.status.toUpperCase() + "</b> | " + d.junction_name;
+  }
+
+  function fillForceOptions() {
+    forceSel.innerHTML = "";
+    [
+      {v:"", t:"AUTO"},
+      {v:"red", t:"RED"},
+      {v:"amber", t:"AMBER"},
+      {v:"green", t:"GREEN"},
+      {v:"ambulance", t:"AMBULANCE"}
+    ].forEach(x=>{
+      const o = document.createElement("option");
+      o.value = x.v;
+      o.textContent = x.t;
+      forceSel.appendChild(o);
+    });
   }
 
   function fillSigOptions() {
@@ -860,19 +918,53 @@ function renderDashboardHTML(TOKEN) {
     line2.value = t.l2 || "";
   }
 
+  function fillAmbulanceOptions() {
+    ambSel.innerHTML = "";
+    ambulanceSlogans.forEach((s, i) => {
+      const o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = (i + 1) + ". " + s;
+      ambSel.appendChild(o);
+    });
+  }
+
+  function updateAmbPreview() {
+    const d = currentDeviceRow(devSel.value);
+    const devName = d ? d.device_id : "DEVICE";
+    ambPreview.value = devName + " STOP | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
+  }
+
+  forceSel.addEventListener("change", () => {
+    const f = forceSel.value || "";
+    if (f === "ambulance") {
+      normalGrid.style.display = "none";
+      lineGrid.style.display = "none";
+      ambulanceGrid.style.display = "grid";
+      updateAmbPreview();
+    } else {
+      ambulanceGrid.style.display = "none";
+      normalGrid.style.display = "grid";
+      lineGrid.style.display = "grid";
+    }
+  });
+
   sigSel.addEventListener("change", () => {
     fillSlotOptions();
     autofillLines();
   });
   slotSel.addEventListener("change", autofillLines);
-  devSel.addEventListener("change", updateCurrentLine);
+  devSel.addEventListener("change", () => {
+    updateCurrentLine();
+    updateAmbPreview();
+  });
+  ambSel.addEventListener("change", updateAmbPreview);
 
   function buildTree() {
     treeBody.innerHTML = "";
 
     const grouped = {};
     DEVICE_CACHE.forEach(d => {
-      const j = d.junction_name || "Unknown Junction";
+      const j = d.junction_name || "Junction Not Sent";
       if (!grouped[j]) grouped[j] = [];
       grouped[j].push(d);
     });
@@ -900,6 +992,7 @@ function renderDashboardHTML(TOKEN) {
             dBtn.onclick = () => {
               devSel.value = dev.device_id;
               updateCurrentLine();
+              updateAmbPreview();
               showTab("msg");
             };
             wrap.appendChild(dBtn);
@@ -928,8 +1021,8 @@ function renderDashboardHTML(TOKEN) {
         const icon = pinIcon(d.status);
         const pop =
           "<b>" + d.device_id + "</b>" +
-          "<br>Junction: <b>" + (d.junction_name || "Unknown Junction") + "</b>" +
-          (d.arm_name ? "<br>Arm: <b>" + d.arm_name + "</b>" : "") +
+          "<br>Junction: <b>" + d.junction_name + "</b>" +
+          "<br>Arm: <b>" + d.arm_name + "</b>" +
           "<br>Status: <b style='color:" + (isOn ? "#16a34a" : "#dc2626") + "'>" + d.status + "</b>" +
           "<br>Last seen: " + new Date(d.last_seen || 0).toLocaleString();
 
@@ -957,6 +1050,7 @@ function renderDashboardHTML(TOKEN) {
       }
 
       updateCurrentLine();
+      updateAmbPreview();
       if (treeVisible) buildTree();
     } catch (e) {
       // keep status static
@@ -976,14 +1070,20 @@ function renderDashboardHTML(TOKEN) {
       return;
     }
 
-    const payload = {
+    const f = forceSel.value || "";
+    let payload = {
       device_id,
-      force: forceSel.value || "",
-      sig: sigSel.value,
-      slot: Number(slotSel.value || 0),
-      line1: line1.value || "",
-      line2: line2.value || ""
+      force: f
     };
+
+    if (f === "ambulance") {
+      payload.amb_slot = Number(ambSel.value || 0);
+    } else {
+      payload.sig = sigSel.value;
+      payload.slot = Number(slotSel.value || 0);
+      payload.line1 = line1.value || "";
+      payload.line2 = line2.value || "";
+    }
 
     setStatus("Sending...", true);
 
@@ -1003,7 +1103,8 @@ function renderDashboardHTML(TOKEN) {
         return;
       }
 
-      if ((forceSel.value || "") === "") setStatus("Sent | Auto mode restored", true);
+      if (f === "") setStatus("Sent | Auto mode restored", true);
+      else if (f === "ambulance") setStatus("Sent | Ambulance active", true);
       else setStatus("Sent", true);
 
     } catch (e) {
@@ -1013,9 +1114,12 @@ function renderDashboardHTML(TOKEN) {
 
   sendBtn.addEventListener("click", sendToESP);
 
+  fillForceOptions();
   fillSigOptions();
   fillSlotOptions();
+  fillAmbulanceOptions();
   autofillLines();
+  updateAmbPreview();
 
   showTab("map");
   loadDevices(true);
