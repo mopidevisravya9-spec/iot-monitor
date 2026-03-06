@@ -1,14 +1,14 @@
 // server.js ✅ FULL WORKING (NO MongoDB)
 // LIGHT ORANGE + WHITE + TIMES NEW ROMAN
-// ✅ Login page (logo + username + password + powered by)
-// ✅ Prevent browser autofill showing username/password before typing
-// ✅ No session persistence: refresh -> login
-// ✅ Dashboard has Logout ICON (top-right)
-// ✅ Status is STATIC (changes ONLY when you click Send)
-// ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ Devices grouped by: Junction -> Arm -> Device
-// ✅ Force includes AMBULANCE (junction-wide persistent until AUTO junction-wide)
-// ✅ Dashboard uses ONLY live ESP data (in-memory)
+// ✅ Login page
+// ✅ Prevent autofill
+// ✅ Refresh -> login
+// ✅ Logout icon top-right
+// ✅ Static status (changes only on Send)
+// ✅ Junction -> Device subtabs restored
+// ✅ Ambulance mode junction-wide
+// ✅ Auto mode junction-wide
+// ✅ Uses only live ESP heartbeat data
 
 const express = require("express");
 const cors = require("cors");
@@ -18,16 +18,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static("public")); // public/arcadis.png, image.png, logo.png
+app.use(express.static("public"));
 
 // ======================
-// LOGIN (hardcoded)
+// LOGIN
 // ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
-// token store (in-memory)
-const TOKENS = new Map(); // token -> { exp }
+const TOKENS = new Map();
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
 function makeToken() {
@@ -62,13 +61,10 @@ const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
 
 // ======================
-// IN-MEMORY STORES (NO DB)
+// IN-MEMORY DATA
 // ======================
-// device_id -> { device_id, junction_name, arm_name, lat, lng, last_seen, status }
-const DEVICES = new Map();
-
-// device_id -> cloud message state (force + packs + slot + version)
-const CLOUD = new Map();
+const DEVICES = new Map(); // device_id -> live device
+const CLOUD = new Map();   // device_id -> cloud message state
 
 // ======================
 // DEFAULT PACKS
@@ -81,7 +77,7 @@ function defaultPacks() {
       ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
       ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
       ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
-      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE’S FUTURE"],
+      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE'S FUTURE"],
       ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"],
     ]),
     amber: pack([
@@ -103,18 +99,16 @@ function defaultPacks() {
       ["FAST DRIVING AT JUNCTIONS INVITES ACCIDENTS", "SLOW DOWN AND STAY ALERT"],
       ["WITHOUT SIGNALS SAFETY DEPENDS ON YOU", "DRIVE WITH PATIENCE"],
       ["DISCIPLINED DRIVERS CREATE SAFE ROADS", "FOLLOW TRAFFIC RULES"],
-      ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"],
+      ["YOUR SPEED DECIDES SOMEONE'S FUTURE", "DRIVE RESPONSIBLY"],
     ]),
   };
 }
 
 function ambulancePacks() {
-  // line1 is computed per device from arm_name: "ROAD X STOP"
-  // line2 is the awareness slogan (ESP should scroll it)
   return [
-    ["", "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE"],
+    ["", "GIVE WAY TO AMBULANCE — SOMEONE'S LIFE IS ON THE LINE"],
     ["", "MOVE LEFT, STAY CALM — CLEAR THE PATH FOR EMERGENCY"],
-    ["", "DON’T BLOCK THE JUNCTION — AMBULANCE NEEDS A CLEAR EXIT"],
+    ["", "DON'T BLOCK THE JUNCTION — AMBULANCE NEEDS A CLEAR EXIT"],
     ["", "HEAR THE SIREN? MAKE SPACE — SECONDS SAVE LIVES"],
     ["", "STOP SAFELY AND LET IT PASS — EMERGENCY FIRST"],
   ];
@@ -156,14 +150,14 @@ function ensureCloud(device_id) {
   if (!CLOUD.has(device_id)) {
     CLOUD.set(device_id, {
       device_id,
-      force: "", // "" auto | red | amber | green | ambulance
+      force: "",
       slot: { red: 0, amber: 0, green: 0, no: 0, ambulance: 0 },
       packs: { ...defaultPacks(), ambulance: ambulancePacks() },
       v: 0,
       updated_at: 0,
-      ambulance_line1: "", // computed per device
-      ambulance_line2: "", // chosen by slot
-      ambulance_junction: "", // stored for clarity
+      ambulance_line1: "",
+      ambulance_line2: "",
+      ambulance_junction: "",
     });
   }
   return CLOUD.get(device_id);
@@ -175,7 +169,6 @@ function computeRoadStop(arm_name) {
   if (m) return `ROAD ${m[1]} STOP`;
   return `${a} STOP`;
 }
-
 function devicesInSameJunction(junction_name) {
   const j = normText(junction_name);
   const list = [];
@@ -186,7 +179,7 @@ function devicesInSameJunction(junction_name) {
 }
 
 // ======================
-// AUTH MIDDLEWARE
+// AUTH
 // ======================
 function requireAuth(req, res, next) {
   const token = req.headers["x-auth-token"];
@@ -195,13 +188,10 @@ function requireAuth(req, res, next) {
 }
 
 // ======================
-// HOME
+// ROUTES
 // ======================
 app.get("/", (req, res) => res.redirect("/login"));
 
-// ======================
-// LOGIN (GET)
-// ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
 <html>
@@ -213,24 +203,34 @@ app.get("/login", (req, res) => {
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
   :root{
-    --orange:#f97316; --orange2:#fb923c; --border:#fed7aa; --muted:#6b7280;
+    --orange:#f97316;
+    --orange2:#fb923c;
+    --border:#fed7aa;
+    --muted:#6b7280;
   }
   .wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
   .card{
-    width:min(520px, 94vw);
-    background:linear-gradient(180deg,#ffffff, #fffaf5);
+    width:min(520px,94vw);
+    background:linear-gradient(180deg,#ffffff,#fffaf5);
     border:1px solid var(--border);
     border-radius:18px;
     box-shadow:0 20px 40px rgba(17,24,39,.12);
-    padding:18px; position:relative; overflow:hidden;
+    padding:18px;
+    position:relative;
+    overflow:hidden;
   }
   .glow{
     position:absolute;inset:-40px;
     background:radial-gradient(circle at 20% 10%, rgba(249,115,22,.22), transparent 55%),
                radial-gradient(circle at 80% 30%, rgba(251,146,60,.18), transparent 55%);
-    pointer-events:none; animation:floaty 6s ease-in-out infinite;
+    pointer-events:none;
+    animation:floaty 6s ease-in-out infinite;
   }
-  @keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(10px)}100%{transform:translateY(0)}}
+  @keyframes floaty{
+    0%{transform:translateY(0)}
+    50%{transform:translateY(10px)}
+    100%{transform:translateY(0)}
+  }
   .top{display:flex;align-items:center;gap:12px;position:relative}
   .logo{
     width:56px;height:56px;border-radius:14px;background:#fff;border:1px solid var(--border);
@@ -241,8 +241,8 @@ app.get("/login", (req, res) => {
   form{margin-top:16px;position:relative}
   label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
   input{
-    width:100%;padding:12px 12px;border-radius:14px;border:1px solid var(--border);background:#fff;
-    font-family:"Times New Roman", Times, serif;font-size:15px;outline:none;
+    width:100%;padding:12px 12px;border-radius:14px;border:1px solid var(--border);
+    background:#fff;font-family:"Times New Roman", Times, serif;font-size:15px;outline:none;
   }
   button{
     width:100%;margin-top:14px;padding:12px;border-radius:14px;border:1px solid var(--orange2);
@@ -259,7 +259,6 @@ app.get("/login", (req, res) => {
 <div class="wrap">
   <div class="card">
     <div class="glow"></div>
-
     <div class="top">
       <img class="logo" src="/arcadis.png" alt="Arcadis" onerror="this.onerror=null; this.src='/image.png';" />
       <div>
@@ -268,7 +267,6 @@ app.get("/login", (req, res) => {
       </div>
     </div>
 
-    <!-- Autofill killer -->
     <form id="loginForm" autocomplete="off">
       <input style="position:absolute;left:-9999px;top:-9999px" autocomplete="username">
       <input style="position:absolute;left:-9999px;top:-9999px" type="password" autocomplete="current-password">
@@ -301,22 +299,27 @@ app.get("/login", (req, res) => {
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
-    const username = u.value.trim();
-    const password = p.value;
 
     try{
       const r = await fetch("/login",{
         method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({
+          username: u.value.trim(),
+          password: p.value
+        })
       });
+
       if(!r.ok){
         const out = await r.json().catch(()=>({}));
         err.textContent = out.error || "Invalid login";
         return;
       }
+
       const html = await r.text();
-      document.open(); document.write(html); document.close();
+      document.open();
+      document.write(html);
+      document.close();
     }catch(e){
       err.textContent = "Network error";
     }
@@ -326,7 +329,6 @@ app.get("/login", (req, res) => {
 </html>`);
 });
 
-// POST /login -> returns dashboard HTML with token injected
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
@@ -336,12 +338,10 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// refresh /dashboard -> go login
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
-// DEVICE REGISTER + HEARTBEAT (NO DB)
-// ESP must send: device_id, lat, lng, junction_name, arm_name
+// DEVICE REGISTER + HEARTBEAT
 // ======================
 function upsertDeviceFromPing(req, res) {
   try {
@@ -380,7 +380,7 @@ app.post("/register", upsertDeviceFromPing);
 app.post("/heartbeat", upsertDeviceFromPing);
 
 // ======================
-// DEVICES LIST (NO DB)
+// DEVICES LIST
 // ======================
 app.get("/devices", (req, res) => {
   try {
@@ -408,9 +408,7 @@ app.get("/devices", (req, res) => {
 });
 
 // ======================
-// CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
-// ✅ AMBULANCE is applied to ALL devices in same junction
-// ✅ AUTO is applied to ALL devices in same junction (returns to controller sync)
+// MESSAGE API
 // ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
@@ -427,7 +425,9 @@ app.post("/api/simple", requireAuth, (req, res) => {
     if (!forces.includes(f)) return res.status(400).json({ error: "invalid force" });
 
     const junction = normText(dev.junction_name || "");
-    if (!junction) return res.status(400).json({ error: "Device junction_name is empty. ESP must send junction_name." });
+    if (!junction) {
+      return res.status(400).json({ error: "Device junction_name is empty. ESP must send junction_name." });
+    }
 
     const sameJunctionDevices = devicesInSameJunction(junction);
     if (sameJunctionDevices.length === 0) {
@@ -436,25 +436,19 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
     const updatedAt = nowMs();
 
-    // ==========
-    // AMBULANCE (junction-wide)
-    // ==========
     if (f === "ambulance") {
       const amb_slot = clampSlot(Number(b.amb_slot || 0));
       const ambList = ambulancePacks();
-      const item = ambList[amb_slot] || ["", "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE"];
+      const item = ambList[amb_slot] || ["", "GIVE WAY TO AMBULANCE — SOMEONE'S LIFE IS ON THE LINE"];
       const line2Slogan = String(item[1] || "");
 
-      // Apply to all devices in that junction (online or offline, doesn't matter)
       for (const d of sameJunctionDevices) {
         const cloud = ensureCloud(d.device_id);
         cloud.force = "ambulance";
         cloud.slot.ambulance = amb_slot;
-
         cloud.ambulance_junction = junction;
         cloud.ambulance_line1 = computeRoadStop(d.arm_name || "");
         cloud.ambulance_line2 = line2Slogan;
-
         cloud.v += 1;
         cloud.updated_at = updatedAt;
       }
@@ -468,13 +462,10 @@ app.post("/api/simple", requireAuth, (req, res) => {
       });
     }
 
-    // ==========
-    // AUTO (junction-wide)
-    // ==========
     if (f === "") {
       for (const d of sameJunctionDevices) {
         const cloud = ensureCloud(d.device_id);
-        cloud.force = ""; // back to controller sync
+        cloud.force = "";
         cloud.v += 1;
         cloud.updated_at = updatedAt;
       }
@@ -488,11 +479,8 @@ app.post("/api/simple", requireAuth, (req, res) => {
       });
     }
 
-    // ==========
-    // RED/AMBER/GREEN (only selected device)
-    // ==========
     const cloud = ensureCloud(device_id);
-    cloud.force = f; // red/amber/green forced
+    cloud.force = f;
 
     const s = normText(b.sig || "red");
     if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
@@ -504,7 +492,6 @@ app.post("/api/simple", requireAuth, (req, res) => {
     cloud.packs[s] = normalizePack(cloud.packs[s] || defaultPacks()[s]);
     cloud.packs[s][sl] = { l1, l2 };
     cloud.slot[s] = sl;
-
     cloud.v += 1;
     cloud.updated_at = updatedAt;
 
@@ -514,8 +501,6 @@ app.post("/api/simple", requireAuth, (req, res) => {
   }
 });
 
-// ESP pulls (no auth)
-// GET /api/pull/:device_id?since=v
 app.get("/api/pull/:device_id", (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -535,7 +520,7 @@ app.get("/api/pull/:device_id", (req, res) => {
         ambulance: {
           junction: cloud.ambulance_junction || "",
           line1: cloud.ambulance_line1 || "ROAD STOP",
-          line2: cloud.ambulance_line2 || "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE",
+          line2: cloud.ambulance_line2 || "GIVE WAY TO AMBULANCE — SOMEONE'S LIFE IS ON THE LINE",
           slot: Number(cloud.slot.ambulance || 0),
         },
         updated_at: cloud.updated_at || 0,
@@ -547,7 +532,7 @@ app.get("/api/pull/:device_id", (req, res) => {
       changed: true,
       device_id,
       v,
-      force: cloud.force || "", // "" auto | red | amber | green
+      force: cloud.force || "",
       slot: cloud.slot || { red: 0, amber: 0, green: 0, no: 0, ambulance: 0 },
       packs: cloud.packs || { ...defaultPacks(), ambulance: ambulancePacks() },
       slots: MSG_SLOTS,
@@ -562,16 +547,12 @@ app.get("/api/pull/:device_id", (req, res) => {
 // DASHBOARD HTML
 // ======================
 function renderDashboardHTML(TOKEN) {
-  // Dashboard code is same UI you already had (Messages tree + ambulance option).
-  // Kept compact here to avoid breaking anything.
-  // IMPORTANT: Send ambulance uses /api/simple and server now broadcasts to whole junction automatically.
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Display Health Monitor</title>
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
@@ -580,43 +561,75 @@ function renderDashboardHTML(TOKEN) {
   html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
   :root{--orange:#f97316;--orange2:#fb923c;--bg:#fff7ed;--card:#fff;--border:#fed7aa;--muted:#6b7280;}
   .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
-  .sidebar{width:300px;min-width:300px;background:var(--card);border:1px solid var(--border);border-radius:16px;display:flex;flex-direction:column;padding:14px 12px;box-shadow:0 10px 26px rgba(17,24,39,.08);overflow:auto;}
+  .sidebar{
+    width:320px;min-width:320px;background:var(--card);border:1px solid var(--border);
+    border-radius:16px;display:flex;flex-direction:column;padding:14px 12px;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);overflow:auto;
+  }
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
   .brand img{width:46px;height:46px;border-radius:12px;background:#fff;object-fit:contain;padding:6px;border:1px solid var(--border)}
   .brandTitle{font-size:16px;font-weight:800}
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
-  .tabBtn{width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;user-select:none;border:1px solid var(--border);background:#fff;font-weight:900;letter-spacing:.5px;transition:.12s ease;}
+  .tabBtn{
+    width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;user-select:none;
+    border:1px solid var(--border);background:#fff;font-weight:900;letter-spacing:.5px;transition:.12s ease;
+  }
   .tabBtn+.tabBtn{margin-top:10px}
   .tabBtn:hover{transform:translateY(-1px)}
-  .tabBtn.active{background:linear-gradient(135deg,var(--orange),var(--orange2));color:#fff;border-color:var(--orange2);box-shadow:0 10px 22px rgba(249,115,22,.25);}
+  .tabBtn.active{
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
+    color:#fff;border-color:var(--orange2);box-shadow:0 10px 22px rgba(249,115,22,.25);
+  }
+  .treeBox{margin-top:12px;border:1px solid var(--border);border-radius:14px;background:#fffaf5;padding:10px}
+  .treeTitle{font-weight:900;margin-bottom:8px}
+  .jBtn,.dBtn{
+    width:100%;text-align:left;padding:10px 12px;border-radius:12px;border:1px solid var(--border);
+    background:#fff;cursor:pointer;font-weight:900;
+  }
+  .jBtn{margin-top:8px}
+  .dBtn{margin-top:8px;font-weight:800}
+  .indent{padding-left:12px;margin-top:6px}
+  .smallNote{margin-top:8px;font-size:12px;color:var(--muted);font-weight:800}
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
-  .content{flex:1;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 10px 26px rgba(17,24,39,.08);position:relative;}
-  .topbar{height:54px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;border-bottom:1px solid var(--border);background:#fff;}
-  .iconBtn{width:42px;height:42px;border-radius:14px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);background:linear-gradient(135deg,var(--orange),var(--orange2));box-shadow:0 12px 22px rgba(249,115,22,.22);cursor:pointer;transition:.12s ease;}
+
+  .content{
+    flex:1;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--border);
+    border-radius:16px;overflow:hidden;box-shadow:0 10px 26px rgba(17,24,39,.08);
+  }
+  .topbar{height:54px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;border-bottom:1px solid var(--border);background:#fff}
+  .iconBtn{
+    width:42px;height:42px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    border:1px solid var(--border);background:linear-gradient(135deg,var(--orange),var(--orange2));
+    box-shadow:0 12px 22px rgba(249,115,22,.22);cursor:pointer;transition:.12s ease;
+  }
   .iconBtn:hover{transform:translateY(-1px)}
   .iconBtn svg{width:20px;height:20px;fill:#fff}
-  .cards{display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);background:#fff;flex-wrap:wrap;}
-  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px;}
+
+  .cards{display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);background:#fff;flex-wrap:wrap}
+  .card{flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px}
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
+
   .view{display:none;flex:1}
   .view.active{display:flex;flex-direction:column}
   #map{flex:1}
   .pad{padding:12px}
-  .panel{max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
+  .panel{max-width:1200px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
   .h1{font-weight:900;font-size:18px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
   .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
-  input,select,button{width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);background:#fff;color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;}
-  button.sendBtn{cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));border-color:var(--orange2);color:#fff;font-weight:900;}
+  input,select,button{
+    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);background:#fff;
+    color:#111827;outline:none;font-size:14px;font-family:"Times New Roman", Times, serif;
+  }
+  button.sendBtn{cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));border-color:var(--orange2);color:#fff;font-weight:900}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
 </style>
 </head>
-
 <body>
 <div class="app">
   <div class="sidebar">
@@ -627,9 +640,18 @@ function renderDashboardHTML(TOKEN) {
         <div class="brandSub">Arcadis Operations</div>
       </div>
     </div>
+
     <div class="divider"></div>
+
     <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
-    <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
+    <div class="tabBtn" id="tabMsgBtn" onclick="toggleMessagesTree()">MESSAGES</div>
+
+    <div id="treeContainer" class="treeBox" style="display:none">
+      <div class="treeTitle">Junctions (Auto)</div>
+      <div id="treeBody"></div>
+      <div class="smallNote">Click MESSAGES again to hide all junctions.</div>
+    </div>
+
     <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
 
@@ -669,33 +691,46 @@ function renderDashboardHTML(TOKEN) {
                 <option value="red">RED</option>
                 <option value="amber">AMBER</option>
                 <option value="green">GREEN</option>
-                <option value="ambulance">AMBULANCE (Junction)</option>
+                <option value="ambulance">AMBULANCE</option>
               </select>
-              <div class="statusLine" style="margin-top:6px">
-                Ambulance/AUTO affects all devices in same junction.
-              </div>
+              <div class="statusLine" style="margin-top:6px">Hint: AMBULANCE stays until you send AUTO.</div>
             </div>
           </div>
 
           <div class="grid" id="normalRow">
-            <div><div class="lbl">Signal group</div><select id="sigSel"></select></div>
-            <div><div class="lbl">Slot</div><select id="slotSel"></select></div>
+            <div>
+              <div class="lbl">Signal group</div>
+              <select id="sigSel"></select>
+            </div>
+            <div>
+              <div class="lbl">Slot</div>
+              <select id="slotSel"></select>
+            </div>
           </div>
 
           <div class="grid" id="ambulanceRow" style="display:none">
-            <div><div class="lbl">Ambulance slogan</div><select id="ambSel"></select></div>
+            <div>
+              <div class="lbl">Ambulance slogan</div>
+              <select id="ambSel"></select>
+            </div>
             <div>
               <div class="lbl">Preview</div>
               <div style="border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff">
                 <div style="font-weight:900" id="ambL1">ROAD STOP</div>
-                <div style="margin-top:6px;font-weight:800;color:#6b7280" id="ambL2">GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE</div>
+                <div style="margin-top:6px;font-weight:800;color:#6b7280" id="ambL2">GIVE WAY TO AMBULANCE — SOMEONE'S LIFE IS ON THE LINE</div>
               </div>
             </div>
           </div>
 
           <div class="grid" id="linesRow">
-            <div><div class="lbl">Line 1</div><input id="line1" placeholder="Line 1"/></div>
-            <div><div class="lbl">Line 2</div><input id="line2" placeholder="Line 2"/></div>
+            <div>
+              <div class="lbl">Line 1</div>
+              <input id="line1" placeholder="Line 1"/>
+            </div>
+            <div>
+              <div class="lbl">Line 2</div>
+              <input id="line2" placeholder="Line 2"/>
+            </div>
           </div>
 
           <div class="row">
@@ -714,16 +749,11 @@ function renderDashboardHTML(TOKEN) {
   try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
   function logout(){ window.location.href = "/login"; }
 
-  function showTab(which){
-    document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
-    document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
-    document.getElementById("viewMap").classList.toggle("active", which==="map");
-    document.getElementById("viewMsg").classList.toggle("active", which==="msg");
-    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
-  }
-
   const map = L.map('map').setView([17.3850,78.4867], 12);
-  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { subdomains:['mt0','mt1','mt2','mt3'], maxZoom: 20 }).addTo(map);
+  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+    subdomains:['mt0','mt1','mt2','mt3'],
+    maxZoom: 20
+  }).addTo(map);
 
   const markers = new Map();
   function pinIcon(status){
@@ -731,7 +761,8 @@ function renderDashboardHTML(TOKEN) {
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
         <svg width="28" height="28" viewBox="0 0 64 64">
-          <path d="M32 2C20 2 10.5 11.6 10.5 23.5 10.5 40.5 32 62 32 62S53.5 40.5 53.5 23.5C53.5 11.6 44 2 32 2Z" fill="\${fill}" stroke="white" stroke-width="4"/>
+          <path d="M32 2C20 2 10.5 11.6 10.5 23.5 10.5 40.5 32 62 32 62S53.5 40.5 53.5 23.5C53.5 11.6 44 2 32 2Z"
+                fill="\${fill}" stroke="white" stroke-width="4"/>
           <circle cx="32" cy="24" r="10" fill="white" opacity="0.95"/>
         </svg>
       </div>\`;
@@ -756,6 +787,8 @@ function renderDashboardHTML(TOKEN) {
   const forceSel = document.getElementById("forceSel");
   const statusTxt = document.getElementById("statusTxt");
   const currentLine = document.getElementById("currentLine");
+  const treeContainer = document.getElementById("treeContainer");
+  const treeBody = document.getElementById("treeBody");
 
   const normalRow = document.getElementById("normalRow");
   const linesRow = document.getElementById("linesRow");
@@ -765,9 +798,55 @@ function renderDashboardHTML(TOKEN) {
   const ambL2 = document.getElementById("ambL2");
 
   let DEVICE_CACHE = [];
+  let treeVisible = false;
+  let expandedJunction = null;
+  let expandedDeviceGroup = null;
 
   function setStatus(text, ok){
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
+  }
+
+  function showTab(which){
+    document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
+    document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
+    document.getElementById("viewMap").classList.toggle("active", which==="map");
+    document.getElementById("viewMsg").classList.toggle("active", which==="msg");
+    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
+  }
+
+  function toggleMessagesTree(){
+    showTab("msg");
+    treeVisible = !treeVisible;
+    treeContainer.style.display = treeVisible ? "block" : "none";
+    if(treeVisible) buildTree();
+  }
+
+  function currentDeviceRow(device_id){
+    return DEVICE_CACHE.find(x=>x.device_id===device_id) || null;
+  }
+
+  function currentDeviceStatus(device_id){
+    const d = currentDeviceRow(device_id);
+    return d ? (d.status || "offline") : "offline";
+  }
+
+  function computeRoadStopFromArm(arm_name){
+    const a = String(arm_name||"").trim().toUpperCase();
+    if(!a) return "ROAD STOP";
+    const m = a.match(/ROAD\\s*([0-9]+)/i);
+    if(m) return "ROAD " + m[1] + " STOP";
+    return a + " STOP";
+  }
+
+  function updateCurrentLine(){
+    const d = currentDeviceRow(devSel.value);
+    if(!d){
+      currentLine.textContent = "Current: -";
+      return;
+    }
+    const j = d.junction_name || "Unknown Junction";
+    const a = d.arm_name ? (" | " + d.arm_name) : "";
+    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + (d.status||"offline").toUpperCase() + "</b> | " + j + a;
   }
 
   function fillSigOptions(){
@@ -779,6 +858,7 @@ function renderDashboardHTML(TOKEN) {
       sigSel.appendChild(o);
     });
   }
+
   function fillSlotOptions(){
     const sig = sigSel.value;
     slotSel.innerHTML = "";
@@ -790,6 +870,7 @@ function renderDashboardHTML(TOKEN) {
       slotSel.appendChild(o);
     }
   }
+
   function autofillLines(){
     const sig = sigSel.value;
     const sl  = Number(slotSel.value||0);
@@ -797,6 +878,7 @@ function renderDashboardHTML(TOKEN) {
     line1.value = t.l1 || "";
     line2.value = t.l2 || "";
   }
+
   function fillAmbulanceOptions(){
     ambSel.innerHTML = "";
     for(let i=0;i<MSG_SLOTS;i++){
@@ -807,33 +889,22 @@ function renderDashboardHTML(TOKEN) {
     }
   }
 
-  function currentDeviceRow(device_id){
-    return DEVICE_CACHE.find(x=>x.device_id===device_id) || null;
-  }
-  function computeRoadStopFromArm(arm_name){
-    const a = String(arm_name||"").trim().toUpperCase();
-    if(!a) return "ROAD STOP";
-    const m = a.match(/ROAD\\s*([0-9]+)/i);
-    if(m) return "ROAD " + m[1] + " STOP";
-    return a + " STOP";
-  }
   function updateAmbPreview(){
     const d = currentDeviceRow(devSel.value);
     const roadStop = computeRoadStopFromArm(d?.arm_name || "");
     const sl = Number(ambSel.value||0);
     ambL1.textContent = roadStop;
-    ambL2.textContent = ambulanceTemplates[sl]?.[1] || "GIVE WAY TO AMBULANCE — SOMEONE’S LIFE IS ON THE LINE";
-  }
-  function updateCurrentLine(){
-    const d = currentDeviceRow(devSel.value);
-    if(!d){ currentLine.textContent = "Current: -"; return; }
-    const j = d.junction_name || "Unknown Junction";
-    const a = d.arm_name ? (" | " + d.arm_name) : "";
-    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + (d.status||"offline").toUpperCase() + "</b> | " + j + a;
+    ambL2.textContent = ambulanceTemplates[sl]?.[1] || "GIVE WAY TO AMBULANCE — SOMEONE'S LIFE IS ON THE LINE";
   }
 
-  devSel.addEventListener("change", ()=>{ updateCurrentLine(); updateAmbPreview(); });
-  sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
+  devSel.addEventListener("change", ()=>{
+    updateCurrentLine();
+    updateAmbPreview();
+  });
+  sigSel.addEventListener("change", ()=>{
+    fillSlotOptions();
+    autofillLines();
+  });
   slotSel.addEventListener("change", autofillLines);
   ambSel.addEventListener("change", updateAmbPreview);
 
@@ -854,67 +925,135 @@ function renderDashboardHTML(TOKEN) {
     }
   });
 
-  async function loadDevices(forceRefresh){
-    const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
-    const data = await res.json();
-    DEVICE_CACHE = Array.isArray(data) ? data : [];
+  function buildTree(){
+    treeBody.innerHTML = "";
 
-    let on=0, off=0;
-    DEVICE_CACHE.forEach(d=> (d.status==="online"?on++:off++));
-    document.getElementById("total").innerText = DEVICE_CACHE.length;
-    document.getElementById("on").innerText = on;
-    document.getElementById("off").innerText = off;
-
+    const grouped = {};
     DEVICE_CACHE.forEach(d=>{
-      const isOn = (d.status==="online");
-      const pos = [d.lat || 0, d.lng || 0];
-      const icon = pinIcon(d.status);
-
       const j = d.junction_name || "Unknown Junction";
-      const a = d.arm_name ? ("<br>Arm: <b>"+d.arm_name+"</b>") : "";
+      if(!grouped[j]) grouped[j] = [];
+      grouped[j].push(d);
+    });
 
-      const pop =
-        "<b>"+d.device_id+"</b>" +
-        "<br>Junction: <b>"+j+"</b>" + a +
-        "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
-        "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+    Object.keys(grouped).sort().forEach(junction=>{
+      const jBtn = document.createElement("button");
+      jBtn.className = "jBtn";
+      jBtn.textContent = junction + (expandedJunction === junction ? " ▲" : " ▼");
+      jBtn.onclick = ()=>{
+        if(expandedJunction === junction){
+          expandedJunction = null;
+          expandedDeviceGroup = null;
+        }else{
+          expandedJunction = junction;
+          expandedDeviceGroup = null;
+        }
+        buildTree();
+      };
+      treeBody.appendChild(jBtn);
 
-      if(markers.has(d.device_id)){
-        markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
-      }else{
-        const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
-        markers.set(d.device_id,m);
+      if(expandedJunction === junction){
+        const wrap = document.createElement("div");
+        wrap.className = "indent";
+
+        const deviceGroupBtn = document.createElement("button");
+        deviceGroupBtn.className = "dBtn";
+        deviceGroupBtn.textContent = "Device" + (expandedDeviceGroup === junction ? " ▲" : " ▼");
+        deviceGroupBtn.onclick = ()=>{
+          expandedDeviceGroup = expandedDeviceGroup === junction ? null : junction;
+          buildTree();
+        };
+        wrap.appendChild(deviceGroupBtn);
+
+        if(expandedDeviceGroup === junction){
+          const dWrap = document.createElement("div");
+          dWrap.className = "indent";
+
+          grouped[junction]
+            .sort((a,b)=>(a.device_id||"").localeCompare(b.device_id||""))
+            .forEach(dev=>{
+              const b = document.createElement("button");
+              b.className = "dBtn";
+              b.textContent = dev.device_id + " (" + dev.status + ")";
+              b.onclick = ()=>{
+                devSel.value = dev.device_id;
+                updateCurrentLine();
+                updateAmbPreview();
+                showTab("msg");
+              };
+              dWrap.appendChild(b);
+            });
+
+          wrap.appendChild(dWrap);
+        }
+
+        treeBody.appendChild(wrap);
       }
     });
-
-    const cur = devSel.value;
-    devSel.innerHTML = "";
-    DEVICE_CACHE.forEach(d=>{
-      const opt = document.createElement("option");
-      opt.value = d.device_id;
-      const j = d.junction_name || "Unknown Junction";
-      const a = d.arm_name ? (" | " + d.arm_name) : "";
-      opt.textContent = d.device_id + " (" + d.status + ") — " + j + a;
-      devSel.appendChild(opt);
-    });
-    if(cur) devSel.value = cur;
-    if(!devSel.value && DEVICE_CACHE[0]) devSel.value = DEVICE_CACHE[0].device_id;
-
-    updateCurrentLine();
-    updateAmbPreview();
   }
 
-  function currentDeviceStatus(device_id){
-    const d = DEVICE_CACHE.find(x=>x.device_id===device_id);
-    return d ? (d.status||"offline") : "offline";
+  async function loadDevices(forceRefresh){
+    try{
+      const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
+      const data = await res.json();
+      DEVICE_CACHE = Array.isArray(data) ? data : [];
+
+      let on=0, off=0;
+      DEVICE_CACHE.forEach(d=> (d.status==="online"?on++:off++));
+      document.getElementById("total").innerText = DEVICE_CACHE.length;
+      document.getElementById("on").innerText = on;
+      document.getElementById("off").innerText = off;
+
+      DEVICE_CACHE.forEach(d=>{
+        const isOn = d.status==="online";
+        const pos = [d.lat || 0, d.lng || 0];
+        const icon = pinIcon(d.status);
+
+        const pop =
+          "<b>"+d.device_id+"</b>" +
+          "<br>Junction: <b>"+(d.junction_name||"Unknown Junction")+"</b>" +
+          (d.arm_name ? "<br>Arm: <b>"+d.arm_name+"</b>" : "") +
+          "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
+          "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+
+        if(markers.has(d.device_id)){
+          markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
+        }else{
+          const m = L.marker(pos, {icon}).addTo(map).bindPopup(pop);
+          markers.set(d.device_id, m);
+        }
+      });
+
+      const cur = devSel.value;
+      devSel.innerHTML = "";
+      DEVICE_CACHE.forEach(d=>{
+        const opt = document.createElement("option");
+        opt.value = d.device_id;
+        opt.textContent = d.device_id + " (" + d.status + ") — " + (d.junction_name || "Unknown Junction");
+        devSel.appendChild(opt);
+      });
+
+      if(cur && DEVICE_CACHE.some(d=>d.device_id===cur)) devSel.value = cur;
+      else if(DEVICE_CACHE[0]) devSel.value = DEVICE_CACHE[0].device_id;
+
+      updateCurrentLine();
+      updateAmbPreview();
+      if(treeVisible) buildTree();
+    }catch(e){
+      // keep current status static
+    }
   }
 
   async function sendToESP(){
     const device_id = devSel.value;
-    if(!device_id){ setStatus("No device selected", false); return; }
+    if(!device_id){
+      setStatus("No device selected", false);
+      return;
+    }
 
-    const st = currentDeviceStatus(device_id);
-    if(st !== "online"){ setStatus("Device OFFLINE. Check device WiFi / power.", false); return; }
+    if(currentDeviceStatus(device_id) !== "online"){
+      setStatus("Device OFFLINE. Check device WiFi / power.", false);
+      return;
+    }
 
     const f = forceSel.value || "";
     setStatus("Sending...", true);
@@ -923,13 +1062,17 @@ function renderDashboardHTML(TOKEN) {
       let payload;
 
       if(f === "ambulance"){
-        payload = { device_id, force: "ambulance", amb_slot: Number(ambSel.value||0) };
+        payload = {
+          device_id,
+          force: "ambulance",
+          amb_slot: Number(ambSel.value || 0)
+        };
       }else{
         payload = {
           device_id,
           force: f,
           sig: sigSel.value,
-          slot: Number(slotSel.value||0),
+          slot: Number(slotSel.value || 0),
           line1: line1.value || "",
           line2: line2.value || ""
         };
@@ -937,15 +1080,21 @@ function renderDashboardHTML(TOKEN) {
 
       const r = await fetch("/api/simple", {
         method:"POST",
-        headers:{ "Content-Type":"application/json", "X-Auth-Token": AUTH_TOKEN },
+        headers:{
+          "Content-Type":"application/json",
+          "X-Auth-Token": AUTH_TOKEN
+        },
         body: JSON.stringify(payload)
       });
 
-      const out = await r.json().catch(()=> ({}));
-      if(!r.ok){ setStatus(out.error || "Send failed", false); return; }
+      const out = await r.json().catch(()=>({}));
+      if(!r.ok){
+        setStatus(out.error || "Send failed", false);
+        return;
+      }
 
-      if(f === "ambulance") setStatus("Ambulance mode ON (junction)", true);
-      else if(f === "") setStatus("AUTO mode ON (junction)", true);
+      if(f === "ambulance") setStatus("Sent | Ambulance mode activated", true);
+      else if(f === "") setStatus("Sent | Auto mode restored", true);
       else setStatus("Sent", true);
 
     }catch(e){
@@ -959,6 +1108,7 @@ function renderDashboardHTML(TOKEN) {
   fillAmbulanceOptions();
   updateAmbPreview();
 
+  showTab("map");
   loadDevices(true);
   setInterval(()=>loadDevices(false), 2000);
 
@@ -973,7 +1123,7 @@ function renderDashboardHTML(TOKEN) {
 }
 
 // ======================
-// START SERVER ✅ (Render uses PORT env)
+// START SERVER
 // ======================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server started on port " + PORT));
