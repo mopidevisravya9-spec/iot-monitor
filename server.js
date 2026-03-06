@@ -1,33 +1,33 @@
-// server.js ✅ FULL WORKING
+// server.js ✅ FULL WORKING (NO DATABASE)
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
 // ✅ Login page
-// ✅ Prevent browser autofill showing username/password before typing
-// ✅ No session persistence: refresh -> login
-// ✅ Dashboard has Logout ICON (top-right)
-// ✅ Status is STATIC (changes ONLY when you click Send)
-// ✅ If device OFFLINE -> client shows error + server blocks /api/simple
-// ✅ Junction tree in MESSAGES tab
-// ✅ Keeps OLD ESP API format so red/amber/green/auto continue working
+// ✅ No MongoDB
+// ✅ Dashboard uses ONLY live ESP JSON data
+// ✅ No duplicate DB rows
+// ✅ Junction -> device tree from heartbeat JSON only
+// ✅ Clicking device selects that ESP only
+// ✅ Send message to selected ESP only
+// ✅ Refresh -> login
+// ✅ Logout icon top-right
+// ✅ Static status (changes only when Send is clicked)
 
 const express = require("express");
 const cors = require("cors");
-const mongoose = require("mongoose");
 const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static("public")); // public/arcadis.png, image.png, logo.png
+app.use(express.static("public"));
 
 // ======================
-// LOGIN (hardcoded)
+// LOGIN
 // ======================
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
-// token store (in-memory)
-const TOKENS = new Map(); // token -> { exp }
+const TOKENS = new Map();
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
 function makeToken() {
@@ -55,14 +55,11 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// ======================
-// DATABASE
-// ======================
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/iot-monitor";
-mongoose
-  .connect(MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch((err) => console.log("DB Error:", err?.message || err));
+function requireAuth(req, res, next) {
+  const token = req.headers["x-auth-token"];
+  if (isValidToken(token)) return next();
+  return res.status(401).json({ error: "Unauthorized" });
+}
 
 // ======================
 // CONSTANTS
@@ -71,17 +68,12 @@ const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
 
 // ======================
-// MODELS
+// LIVE MEMORY ONLY
 // ======================
-const deviceSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
-  junction_name: { type: String, default: "" },
-  arm_name: { type: String, default: "" },
-  lat: { type: Number, default: 0 },
-  lng: { type: Number, default: 0 },
-  last_seen: { type: Number, default: 0 },
-  status: { type: String, default: "offline" },
-});
+// DEVICES = only what ESP sends live
+// CLOUD   = message state per live device
+const DEVICES = new Map(); // key: device_id
+const CLOUD = new Map();   // key: device_id
 
 function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
@@ -94,7 +86,6 @@ function defaultPacks() {
       ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE'S FUTURE"],
       ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"]
     ]),
-
     amber: pack([
       ["EASE OFF THE PEDAL NOW", "A CALM SLOWDOWN KEEPS EVERYONE SAFE"],
       ["NO NEED TO RUSH THE JUNCTION", "A SECOND OF PATIENCE SAVES A LIFE"],
@@ -102,7 +93,6 @@ function defaultPacks() {
       ["LET THE SPEED DROP GENTLY", "SMOOTH BRAKING SAVES FUEL TOO"],
       ["PAUSE YOUR HURRY AT THE CROSSING", "SAFE STREETS START WITH PATIENCE"]
     ]),
-
     green: pack([
       ["SLOW DRIVING SAVES FUEL AND SAVES LIVES", "SMART SPEED PROTECTS PEOPLE AND PLANET"],
       ["CALM DRIVING REDUCES ACCIDENTS AND POLLUTION", "RESPONSIBLE SPEED CREATES HEALTHY CITIES"],
@@ -110,7 +100,6 @@ function defaultPacks() {
       ["SPEED THRILLS BUT SAFETY SAVES", "SAFE DRIVING IS SMART DRIVING"],
       ["MOVE AHEAD WITH CARE AND CONTROL", "ARRIVE SAFE EVERY TIME"]
     ]),
-
     no: pack([
       ["WHEN SIGNALS FAIL DISCIPLINE MUST NOT", "CONTROL YOUR SPEED"],
       ["FAST DRIVING AT JUNCTIONS INVITES ACCIDENTS", "SLOW DOWN AND STAY ALERT"],
@@ -121,31 +110,6 @@ function defaultPacks() {
   };
 }
 
-const cloudMsgSchema = new mongoose.Schema({
-  device_id: { type: String, unique: true, required: true },
-  force: { type: String, default: "" }, // "" | red | amber | green
-  slot: {
-    red: { type: Number, default: 0 },
-    amber: { type: Number, default: 0 },
-    green: { type: Number, default: 0 },
-    no: { type: Number, default: 0 },
-  },
-  packs: {
-    red: { type: Array, default: () => defaultPacks().red },
-    amber: { type: Array, default: () => defaultPacks().amber },
-    green: { type: Array, default: () => defaultPacks().green },
-    no: { type: Array, default: () => defaultPacks().no },
-  },
-  v: { type: Number, default: 0 },
-  updated_at: { type: Number, default: 0 },
-});
-
-const Device = mongoose.model("Device", deviceSchema);
-const CloudMsg = mongoose.model("CloudMsg", cloudMsgSchema);
-
-// ======================
-// HELPERS
-// ======================
 const signals = ["red", "amber", "green", "no"];
 
 function clampSlot(n) {
@@ -165,36 +129,33 @@ function normalizePack(arr) {
   return out;
 }
 
-async function ensureMsgRow(device_id) {
-  return CloudMsg.findOneAndUpdate(
-    { device_id },
-    {
-      $setOnInsert: {
-        device_id,
-        force: "",
-        slot: { red: 0, amber: 0, green: 0, no: 0 },
-        packs: defaultPacks(),
-        v: 0,
-        updated_at: 0,
-      },
-    },
-    { upsert: true, new: true }
-  );
+function ensureCloudRow(device_id) {
+  if (!CLOUD.has(device_id)) {
+    CLOUD.set(device_id, {
+      device_id,
+      force: "",
+      slot: { red: 0, amber: 0, green: 0, no: 0 },
+      packs: defaultPacks(),
+      v: 0,
+      updated_at: 0,
+    });
+  }
+  return CLOUD.get(device_id);
 }
 
-function isDeviceOnlineRow(dev) {
+function isLiveOnline(dev) {
   if (!dev) return false;
-  const last = Number(dev.last_seen || 0);
-  return Date.now() - last <= OFFLINE_AFTER_MS;
+  return Date.now() - Number(dev.last_seen || 0) <= OFFLINE_AFTER_MS;
 }
 
-// ======================
-// AUTH MIDDLEWARE
-// ======================
-function requireAuth(req, res, next) {
-  const token = req.headers["x-auth-token"];
-  if (isValidToken(token)) return next();
-  return res.status(401).json({ error: "Unauthorized" });
+function cleanDeadDevices() {
+  const now = Date.now();
+  for (const [device_id, dev] of DEVICES.entries()) {
+    if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS * 20) {
+      DEVICES.delete(device_id);
+      CLOUD.delete(device_id);
+    }
+  }
 }
 
 // ======================
@@ -203,7 +164,7 @@ function requireAuth(req, res, next) {
 app.get("/", (req, res) => res.redirect("/login"));
 
 // ======================
-// LOGIN (GET)
+// LOGIN PAGE
 // ======================
 app.get("/login", (req, res) => {
   res.send(`<!doctype html>
@@ -279,11 +240,8 @@ app.get("/login", (req, res) => {
 <div class="wrap">
   <div class="card">
     <div class="glow"></div>
-
     <div class="top">
-      <img class="logo" src="/arcadis.png" alt="Arcadis"
-        onerror="this.onerror=null; this.src='/image.png';"
-      />
+      <img class="logo" src="/arcadis.png" alt="Arcadis" onerror="this.onerror=null; this.src='/image.png';" />
       <div>
         <h1>Display Health Monitor</h1>
         <div class="sub">Secure Login</div>
@@ -323,14 +281,14 @@ app.get("/login", (req, res) => {
     e.preventDefault();
     err.textContent = "";
 
-    const username = u.value.trim();
-    const password = p.value;
-
     try{
       const r = await fetch("/login",{
         method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({
+          username: u.value.trim(),
+          password: p.value
+        })
       });
 
       if(!r.ok){
@@ -353,7 +311,7 @@ app.get("/login", (req, res) => {
 });
 
 // ======================
-// LOGIN (POST)
+// LOGIN POST
 // ======================
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
@@ -364,68 +322,67 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// refresh /dashboard -> login
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
-// DEVICE REGISTER + HEARTBEAT
-// ESP can send:
-// { device_id, lat, lng, junction_name, arm_name }
+// REGISTER / HEARTBEAT
+// ONLY LIVE ESP DATA
+// Expected JSON:
+// {
+//   "device_id": "Road 1",
+//   "junction_name": "Rasoolpura",
+//   "arm_name": "Road 1",
+//   "lat": 17.4471,
+//   "lng": 78.4773
+// }
 // ======================
-app.post("/register", async (req, res) => {
+app.post("/register", (req, res) => {
   try {
-    const { device_id, lat, lng, junction_name, arm_name } = req.body || {};
+    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
-    const now = Date.now();
+    const d = {
+      device_id: String(device_id || "").trim(),
+      junction_name: String(junction_name || "").trim(),
+      arm_name: String(arm_name || "").trim(),
+      lat: Number(lat || 0),
+      lng: Number(lng || 0),
+      last_seen: Date.now(),
+      status: "online"
+    };
 
-    const doc = await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $setOnInsert: { device_id },
-        $set: {
-          junction_name: String(junction_name || ""),
-          arm_name: String(arm_name || ""),
-          lat: typeof lat === "number" ? lat : Number(lat || 0),
-          lng: typeof lng === "number" ? lng : Number(lng || 0),
-          last_seen: now,
-          status: "online",
-        },
-      },
-      { upsert: true, new: true }
-    );
+    DEVICES.set(d.device_id, d);
+    ensureCloudRow(d.device_id);
+    cleanDeadDevices();
 
-    await ensureMsgRow(device_id);
-    res.json({ message: "Registered", device: doc });
+    res.json({ ok: true, device: d });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
 
-app.post("/heartbeat", async (req, res) => {
+app.post("/heartbeat", (req, res) => {
   try {
-    const { device_id, lat, lng, junction_name, arm_name } = req.body || {};
+    const { device_id, junction_name, arm_name, lat, lng } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
-    const now = Date.now();
+    const old = DEVICES.get(String(device_id).trim()) || {};
 
-    await Device.findOneAndUpdate(
-      { device_id },
-      {
-        $set: {
-          last_seen: now,
-          status: "online",
-          ...(junction_name !== undefined ? { junction_name: String(junction_name || "") } : {}),
-          ...(arm_name !== undefined ? { arm_name: String(arm_name || "") } : {}),
-          ...(lat !== undefined ? { lat: Number(lat || 0) } : {}),
-          ...(lng !== undefined ? { lng: Number(lng || 0) } : {}),
-        },
-      },
-      { upsert: true, new: true }
-    );
+    const d = {
+      device_id: String(device_id || "").trim(),
+      junction_name: String(junction_name !== undefined ? junction_name : old.junction_name || "").trim(),
+      arm_name: String(arm_name !== undefined ? arm_name : old.arm_name || "").trim(),
+      lat: lat !== undefined ? Number(lat || 0) : Number(old.lat || 0),
+      lng: lng !== undefined ? Number(lng || 0) : Number(old.lng || 0),
+      last_seen: Date.now(),
+      status: "online"
+    };
 
-    await ensureMsgRow(device_id);
-    res.json({ message: "OK" });
+    DEVICES.set(d.device_id, d);
+    ensureCloudRow(d.device_id);
+    cleanDeadDevices();
+
+    res.json({ ok: true, device: d });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -433,40 +390,52 @@ app.post("/heartbeat", async (req, res) => {
 
 // ======================
 // DEVICES LIST
+// ONLY LIVE MEMORY
 // ======================
-app.get("/devices", async (req, res) => {
+app.get("/devices", (req, res) => {
   try {
-    const now = Date.now();
-    await Device.updateMany(
-      { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
-      { $set: { status: "offline" } }
-    );
+    cleanDeadDevices();
 
-    const data = await Device.find().sort({ junction_name: 1, arm_name: 1, last_seen: -1 });
-    res.json(data);
+    const out = [];
+    for (const d of DEVICES.values()) {
+      out.push({
+        device_id: d.device_id,
+        junction_name: d.junction_name || "Unknown Junction",
+        arm_name: d.arm_name || "",
+        lat: Number(d.lat || 0),
+        lng: Number(d.lng || 0),
+        last_seen: Number(d.last_seen || 0),
+        status: isLiveOnline(d) ? "online" : "offline"
+      });
+    }
+
+    out.sort((a, b) => {
+      const ja = String(a.junction_name || "");
+      const jb = String(b.junction_name || "");
+      if (ja !== jb) return ja.localeCompare(jb);
+      return String(a.device_id || "").localeCompare(String(b.device_id || ""));
+    });
+
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
 
 // ======================
-// CLOUD MESSAGE API
-// IMPORTANT:
-// This keeps the OLD working structure for ESP.
+// SEND MESSAGE TO SELECTED ESP ONLY
 // ======================
-app.post("/api/simple", requireAuth, async (req, res) => {
+app.post("/api/simple", requireAuth, (req, res) => {
   try {
     const { device_id, force, sig, slot, line1, line2 } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
-    const dev = await Device.findOne({ device_id });
-    if (!isDeviceOnlineRow(dev)) {
-      return res.status(400).json({
-        error: "Device is OFFLINE. Check device WiFi / power / network.",
-      });
+    const dev = DEVICES.get(String(device_id).trim());
+    if (!isLiveOnline(dev)) {
+      return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
     }
 
-    const doc = await ensureMsgRow(device_id);
+    const doc = ensureCloudRow(String(device_id).trim());
     const now = Date.now();
 
     const f = String(force || "");
@@ -494,7 +463,8 @@ app.post("/api/simple", requireAuth, async (req, res) => {
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
 
-    await doc.save();
+    CLOUD.set(doc.device_id, doc);
+
     res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -503,16 +473,14 @@ app.post("/api/simple", requireAuth, async (req, res) => {
 
 // ======================
 // ESP PULL
-// IMPORTANT:
-// This is the old working response format.
-// Do not break this unless ESP firmware also changes.
+// OLD WORKING FORMAT
 // ======================
-app.get("/api/pull/:device_id", async (req, res) => {
+app.get("/api/pull/:device_id", (req, res) => {
   try {
-    const device_id = req.params.device_id;
+    const device_id = String(req.params.device_id || "").trim();
     const since = Number(req.query.since || 0);
 
-    const doc = await ensureMsgRow(device_id);
+    const doc = ensureCloudRow(device_id);
     const v = Number(doc.v || 0);
 
     if (since >= v) return res.json({ ok: true, changed: false, v });
@@ -678,7 +646,7 @@ function renderDashboardHTML(TOKEN) {
     <div class="tabBtn" id="tabMsgBtn">MESSAGES</div>
 
     <div id="treeContainer" class="treeBox" style="display:none">
-      <div class="treeTitle">Junctions (Auto)</div>
+      <div class="treeTitle">Junctions (Live)</div>
       <div id="treeBody"></div>
       <div class="smallNote">Click MESSAGES again to hide all junctions.</div>
     </div>
