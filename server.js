@@ -53,14 +53,18 @@ function requireAuth(req, res, next) {
 // ======================
 const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
+const TEST_JUNCTION = "Rasoolpura";
 
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-// DEVICES key = final shown device id (usually arm name / road name)
-const DEVICES = new Map();
-// CLOUD key = same final shown device id
-const CLOUD = new Map();
+// Real/live devices
+const DEVICES = new Map(); // key => final visible device id
+const CLOUD = new Map();   // key => same device id
+
+// Virtual test devices
+const VIRTUAL_DEVICES = new Map();
+const VIRTUAL_CLOUD = new Map();
 
 function safeText(v) {
   return String(v || "").trim();
@@ -137,22 +141,29 @@ function normalizePack(arr) {
   return out;
 }
 
+function makeCloudDoc(device_id) {
+  return {
+    device_id,
+    mode: "auto", // auto | force_red | force_amber | force_green | ambulance
+    force: "",
+    slot: { red: 0, amber: 0, green: 0, no: 0 },
+    packs: defaultPacks(),
+    v: 0,
+    updated_at: 0,
+    ambulanceActive: false,
+    ambulanceL1: "",
+    ambulanceL2: ""
+  };
+}
+
 function ensureCloudRow(device_id) {
-  if (!CLOUD.has(device_id)) {
-    CLOUD.set(device_id, {
-      device_id,
-      mode: "auto",
-      force: "",
-      slot: { red: 0, amber: 0, green: 0, no: 0 },
-      packs: defaultPacks(),
-      v: 0,
-      updated_at: 0,
-      ambulanceActive: false,
-      ambulanceL1: "",
-      ambulanceL2: ""
-    });
-  }
+  if (!CLOUD.has(device_id)) CLOUD.set(device_id, makeCloudDoc(device_id));
   return CLOUD.get(device_id);
+}
+
+function ensureVirtualCloudRow(device_id) {
+  if (!VIRTUAL_CLOUD.has(device_id)) VIRTUAL_CLOUD.set(device_id, makeCloudDoc(device_id));
+  return VIRTUAL_CLOUD.get(device_id);
 }
 
 function isLiveOnline(dev) {
@@ -170,7 +181,6 @@ function cleanDeadDevices() {
   }
 }
 
-// remove duplicate entries for same raw ESP
 function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
   for (const [key, dev] of DEVICES.entries()) {
     if (key !== keepKey && safeText(dev.raw_device_id) === safeText(rawDeviceId)) {
@@ -180,13 +190,121 @@ function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
   }
 }
 
-// extra safety: remove same final device name from other raw devices if needed
 function removeConflictingFinalKey(finalKey, rawDeviceId) {
   const existing = DEVICES.get(finalKey);
   if (existing && safeText(existing.raw_device_id) !== safeText(rawDeviceId)) {
     CLOUD.delete(finalKey);
     DEVICES.delete(finalKey);
   }
+}
+
+// ======================
+// VIRTUAL TEST DEVICES
+// ======================
+function seedVirtualDevices() {
+  const now = Date.now();
+  const items = [
+    {
+      device_id: "ROAD 2",
+      raw_device_id: "VIRTUAL_ROAD_2",
+      junction_name: TEST_JUNCTION,
+      arm_name: "ROAD 2",
+      lat: 17.4472,
+      lng: 78.4774,
+      last_seen: now,
+      status: "online",
+      virtual: true
+    },
+    {
+      device_id: "ROAD 3",
+      raw_device_id: "VIRTUAL_ROAD_3",
+      junction_name: TEST_JUNCTION,
+      arm_name: "ROAD 3",
+      lat: 17.4473,
+      lng: 78.4775,
+      last_seen: now,
+      status: "online",
+      virtual: true
+    }
+  ];
+
+  items.forEach(d => {
+    VIRTUAL_DEVICES.set(d.device_id, d);
+    ensureVirtualCloudRow(d.device_id);
+  });
+}
+seedVirtualDevices();
+
+function allDevicesMerged() {
+  cleanDeadDevices();
+
+  const latestByRaw = new Map();
+
+  for (const dev of DEVICES.values()) {
+    const raw = safeText(dev.raw_device_id || dev.device_id);
+    const prev = latestByRaw.get(raw);
+    if (!prev || Number(dev.last_seen || 0) >= Number(prev.last_seen || 0)) {
+      latestByRaw.set(raw, dev);
+    }
+  }
+
+  const out = [...latestByRaw.values()].map(d => ({
+    device_id: d.device_id,
+    raw_device_id: d.raw_device_id,
+    junction_name: normJunction(d.junction_name),
+    arm_name: normArm(d.arm_name),
+    lat: Number(d.lat || 0),
+    lng: Number(d.lng || 0),
+    last_seen: Number(d.last_seen || 0),
+    status: isLiveOnline(d) ? "online" : "offline",
+    virtual: false
+  }));
+
+  for (const v of VIRTUAL_DEVICES.values()) {
+    out.push({
+      device_id: v.device_id,
+      raw_device_id: v.raw_device_id,
+      junction_name: normJunction(v.junction_name),
+      arm_name: normArm(v.arm_name),
+      lat: Number(v.lat || 0),
+      lng: Number(v.lng || 0),
+      last_seen: Number(v.last_seen || 0),
+      status: "online",
+      virtual: true
+    });
+  }
+
+  out.sort((a, b) => {
+    const ja = String(a.junction_name || "");
+    const jb = String(b.junction_name || "");
+    if (ja !== jb) return ja.localeCompare(jb);
+    return String(a.device_id || "").localeCompare(String(b.device_id || ""));
+  });
+
+  return out;
+}
+
+function getMergedDeviceById(device_id) {
+  if (DEVICES.has(device_id)) {
+    const d = DEVICES.get(device_id);
+    return {
+      ...d,
+      status: isLiveOnline(d) ? "online" : "offline",
+      virtual: false
+    };
+  }
+  if (VIRTUAL_DEVICES.has(device_id)) {
+    return {
+      ...VIRTUAL_DEVICES.get(device_id),
+      status: "online",
+      virtual: true
+    };
+  }
+  return null;
+}
+
+function getDevicesByJunction(junction_name) {
+  return allDevicesMerged().filter(d => d.junction_name === junction_name && d.status === "online");
 }
 
 // ======================
@@ -354,7 +472,6 @@ function upsertLiveDevice(req, res) {
     const arm = safeText(body.arm_name);
     const finalDeviceId = arm || rawDeviceId;
 
-    // remove stale duplicate entries for same raw esp
     removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
     removeConflictingFinalKey(finalDeviceId, rawDeviceId);
 
@@ -367,23 +484,11 @@ function upsertLiveDevice(req, res) {
       lat: body.lat !== undefined ? Number(body.lat || 0) : Number(old.lat || 0),
       lng: body.lng !== undefined ? Number(body.lng || 0) : Number(old.lng || 0),
       last_seen: Date.now(),
-      status: "online"
+      status: "online",
+      virtual: false
     };
 
     DEVICES.set(finalDeviceId, next);
-
-    // carry cloud state if raw id existed before
-    for (const [key, doc] of CLOUD.entries()) {
-      if (key !== finalDeviceId) {
-        const dev = DEVICES.get(key);
-        if (dev && safeText(dev.raw_device_id) === rawDeviceId) {
-          CLOUD.set(finalDeviceId, doc);
-          CLOUD.delete(key);
-          break;
-        }
-      }
-    }
-
     ensureCloudRow(finalDeviceId);
     cleanDeadDevices();
 
@@ -401,37 +506,49 @@ app.post("/heartbeat", upsertLiveDevice);
 // ======================
 app.get("/devices", (req, res) => {
   try {
-    cleanDeadDevices();
+    res.json(allDevicesMerged().map(d => ({
+      device_id: d.device_id,
+      junction_name: d.junction_name,
+      arm_name: d.arm_name,
+      lat: d.lat,
+      lng: d.lng,
+      last_seen: d.last_seen,
+      status: d.status
+    })));
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
 
-    // final dedupe by raw_device_id: keep latest
-    const latestByRaw = new Map();
-    for (const dev of DEVICES.values()) {
-      const raw = safeText(dev.raw_device_id || dev.device_id);
-      const prev = latestByRaw.get(raw);
-      if (!prev || Number(dev.last_seen || 0) >= Number(prev.last_seen || 0)) {
-        latestByRaw.set(raw, dev);
-      }
-    }
-
+// ======================
+// DEBUG CLOUD JSON
+// ======================
+app.get("/api/debug/cloud", (req, res) => {
+  try {
     const out = [];
-    for (const d of latestByRaw.values()) {
+
+    for (const d of allDevicesMerged()) {
+      const cloudDoc = d.virtual
+        ? ensureVirtualCloudRow(d.device_id)
+        : ensureCloudRow(d.device_id);
+
       out.push({
         device_id: d.device_id,
-        junction_name: normJunction(d.junction_name),
-        arm_name: normArm(d.arm_name),
-        lat: Number(d.lat || 0),
-        lng: Number(d.lng || 0),
-        last_seen: Number(d.last_seen || 0),
-        status: isLiveOnline(d) ? "online" : "offline"
+        junction_name: d.junction_name,
+        arm_name: d.arm_name,
+        virtual: !!d.virtual,
+        status: d.status,
+        mode: cloudDoc.mode,
+        force: cloudDoc.force,
+        ambulanceActive: cloudDoc.ambulanceActive,
+        ambulanceL1: cloudDoc.ambulanceL1,
+        ambulanceL2: cloudDoc.ambulanceL2,
+        slot: cloudDoc.slot,
+        packs: cloudDoc.packs,
+        v: cloudDoc.v,
+        updated_at: cloudDoc.updated_at
       });
     }
-
-    out.sort((a, b) => {
-      const ja = String(a.junction_name || "");
-      const jb = String(b.junction_name || "");
-      if (ja !== jb) return ja.localeCompare(jb);
-      return String(a.device_id || "").localeCompare(String(b.device_id || ""));
-    });
 
     res.json(out);
   } catch (e) {
@@ -440,7 +557,7 @@ app.get("/devices", (req, res) => {
 });
 
 // ======================
-// APPLY MESSAGE TO ONE DEVICE
+// APPLY TO ONE DEVICE
 // ======================
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const f = String(payload.force || "");
@@ -514,6 +631,16 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   doc.updated_at = now;
 }
 
+function getCloudStoreForDevice(dev) {
+  return dev.virtual ? VIRTUAL_CLOUD : CLOUD;
+}
+
+function ensureCloudForDevice(dev) {
+  return dev.virtual
+    ? ensureVirtualCloudRow(dev.device_id)
+    : ensureCloudRow(dev.device_id);
+}
+
 // ======================
 // SEND MESSAGE
 // ======================
@@ -531,17 +658,16 @@ app.post("/api/simple", requireAuth, (req, res) => {
     let targets = [];
 
     if (targetType === "device") {
-      const dev = DEVICES.get(targetValue);
-      if (!isLiveOnline(dev)) {
+      const dev = getMergedDeviceById(targetValue);
+      if (!dev) {
+        return res.status(400).json({ error: "Device not found." });
+      }
+      if (dev.status !== "online") {
         return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
       }
       targets = [dev];
     } else if (targetType === "junction") {
-      for (const dev of DEVICES.values()) {
-        if (dev.junction_name === targetValue && isLiveOnline(dev)) {
-          targets.push(dev);
-        }
-      }
+      targets = getDevicesByJunction(targetValue);
       if (!targets.length) {
         return res.status(400).json({ error: "No online devices found in selected junction." });
       }
@@ -550,31 +676,25 @@ app.post("/api/simple", requireAuth, (req, res) => {
     }
 
     if (String(payload.force || "") === "ambulance" && payload.source_device_id) {
-      const sourceDev = DEVICES.get(String(payload.source_device_id));
-      if (!isLiveOnline(sourceDev)) {
+      const sourceDev = getMergedDeviceById(String(payload.source_device_id));
+      if (!sourceDev || sourceDev.status !== "online") {
         return res.status(400).json({ error: "Source device is OFFLINE." });
       }
 
-      targets = [];
-      for (const dev of DEVICES.values()) {
-        if (dev.junction_name === sourceDev.junction_name && isLiveOnline(dev)) {
-          targets.push(dev);
-        }
-      }
+      targets = getDevicesByJunction(sourceDev.junction_name);
       if (!targets.length) {
         return res.status(400).json({ error: "No online devices found in source junction." });
       }
     }
 
-    // dedupe targets by raw_device_id again, just in case
-    const uniqueByRaw = new Map();
+    const uniqueByDevice = new Map();
     for (const dev of targets) {
-      uniqueByRaw.set(safeText(dev.raw_device_id || dev.device_id), dev);
+      uniqueByDevice.set(dev.device_id, dev);
     }
-    targets = [...uniqueByRaw.values()];
+    targets = [...uniqueByDevice.values()];
 
     for (const dev of targets) {
-      const doc = ensureCloudRow(dev.device_id);
+      const doc = ensureCloudForDevice(dev);
       applyMessageToDevice(
         doc,
         dev,
@@ -582,7 +702,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
         now,
         String(dev.device_id) === String(payload.source_device_id || "")
       );
-      CLOUD.set(dev.device_id, doc);
+      getCloudStoreForDevice(dev).set(dev.device_id, doc);
     }
 
     res.json({
@@ -597,6 +717,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
 // ======================
 // ESP PULL
+// Only real ESPs pull. Virtual devices are for dashboard/json testing.
 // ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
@@ -752,9 +873,6 @@ function renderDashboardHTML(TOKEN) {
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
-  #editBtn{
-    background:#fff;color:#111827;border:1px solid var(--border);font-weight:900;
-  }
 </style>
 </head>
 
@@ -852,7 +970,6 @@ function renderDashboardHTML(TOKEN) {
 
           <div class="row">
             <button class="sendBtn" id="sendBtn">Send to ESP</button>
-            <button type="button" id="editBtn">Edit Current</button>
           </div>
 
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
@@ -897,8 +1014,6 @@ function renderDashboardHTML(TOKEN) {
   let selectedTargetType = "device";
   let selectedTargetValue = "";
   let selectedSourceDevice = "";
-  let lastLoadedSignal = "red";
-  let lastLoadedSlot = 0;
 
   function logout() {
     window.location.href = "/login";
@@ -941,8 +1056,8 @@ function renderDashboardHTML(TOKEN) {
   }).addTo(map);
 
   const markers = new Map();
-  function pinIcon(status){
-    const fill = (status === "online") ? "#16a34a" : "#dc2626";
+  function pinIcon(status, virtual){
+    const fill = virtual ? "#2563eb" : (status === "online" ? "#16a34a" : "#dc2626");
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
         <svg width="28" height="28" viewBox="0 0 64 64">
@@ -983,7 +1098,9 @@ function renderDashboardHTML(TOKEN) {
       currentLine.textContent = "Current: -";
       return;
     }
-    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + d.status.toUpperCase() + "</b> | " + d.junction_name;
+    currentLine.innerHTML =
+      "Current: <b>" + d.device_id + "</b> | <b>" + d.status.toUpperCase() + "</b> | " + d.junction_name +
+      (d.virtual ? " | TEST" : "");
   }
 
   function fillForceOptions() {
@@ -1030,22 +1147,6 @@ function renderDashboardHTML(TOKEN) {
     const t = templates[sig]?.[sl] || { l1:"", l2:"" };
     line1.value = t.l1 || "";
     line2.value = t.l2 || "";
-  }
-
-  function getCurrentTemplateText(sig, slot) {
-    const t = templates[sig]?.[slot] || { l1: "", l2: "" };
-    return { l1: t.l1 || "", l2: t.l2 || "" };
-  }
-
-  function loadEditorForSignal(sig, slot) {
-    lastLoadedSignal = sig;
-    lastLoadedSlot = slot;
-    sigSel.value = sig;
-    fillSlotOptions();
-    slotSel.value = String(slot);
-    const t = getCurrentTemplateText(sig, slot);
-    line1.value = t.l1;
-    line2.value = t.l2;
   }
 
   function fillAmbulanceOptions() {
@@ -1109,14 +1210,8 @@ function renderDashboardHTML(TOKEN) {
     });
 
     Object.keys(grouped).sort().forEach(junction => {
-      const row = document.createElement("div");
-      row.style.display = "flex";
-      row.style.gap = "8px";
-      row.style.marginTop = "8px";
-
       const jBtn = document.createElement("button");
       jBtn.className = "jBtn";
-      jBtn.style.flex = "1";
       if (selectedTargetType === "junction" && selectedTargetValue === junction) {
         jBtn.classList.add("selectedTarget");
       }
@@ -1129,23 +1224,7 @@ function renderDashboardHTML(TOKEN) {
         updateCurrentLine();
         buildTree();
       };
-
-      const jEdit = document.createElement("button");
-      jEdit.className = "dBtn";
-      jEdit.style.width = "90px";
-      jEdit.textContent = "Edit";
-      jEdit.onclick = () => {
-        selectedTargetType = "junction";
-        selectedTargetValue = junction;
-        selectedSourceDevice = "";
-        updateCurrentLine();
-        showTab("msg");
-        loadEditorForSignal(sigSel.value || "red", Number(slotSel.value || 0));
-      };
-
-      row.appendChild(jBtn);
-      row.appendChild(jEdit);
-      treeBody.appendChild(row);
+      treeBody.appendChild(jBtn);
 
       if (expandedJunction === junction) {
         const wrap = document.createElement("div");
@@ -1154,18 +1233,12 @@ function renderDashboardHTML(TOKEN) {
         grouped[junction]
           .sort((a,b)=>(a.device_id || "").localeCompare(b.device_id || ""))
           .forEach(dev => {
-            const dRow = document.createElement("div");
-            dRow.style.display = "flex";
-            dRow.style.gap = "8px";
-            dRow.style.marginTop = "8px";
-
             const dBtn = document.createElement("button");
             dBtn.className = "dBtn";
-            dBtn.style.flex = "1";
             if (selectedTargetType === "device" && selectedTargetValue === dev.device_id) {
               dBtn.classList.add("selectedTarget");
             }
-            dBtn.textContent = dev.device_id + " (" + dev.status + ")";
+            dBtn.textContent = dev.device_id + " (" + dev.status + ")" + (dev.virtual ? " [TEST]" : "");
             dBtn.onclick = () => {
               selectedTargetType = "device";
               selectedTargetValue = dev.device_id;
@@ -1176,25 +1249,7 @@ function renderDashboardHTML(TOKEN) {
               buildTree();
               showTab("msg");
             };
-
-            const dEdit = document.createElement("button");
-            dEdit.className = "dBtn";
-            dEdit.style.width = "90px";
-            dEdit.textContent = "Edit";
-            dEdit.onclick = () => {
-              selectedTargetType = "device";
-              selectedTargetValue = dev.device_id;
-              selectedSourceDevice = dev.device_id;
-              devSel.value = dev.device_id;
-              updateCurrentLine();
-              updateAmbPreview();
-              showTab("msg");
-              loadEditorForSignal(sigSel.value || "red", Number(slotSel.value || 0));
-            };
-
-            dRow.appendChild(dBtn);
-            dRow.appendChild(dEdit);
-            wrap.appendChild(dRow);
+            wrap.appendChild(dBtn);
           });
 
         treeBody.appendChild(wrap);
@@ -1215,14 +1270,15 @@ function renderDashboardHTML(TOKEN) {
       document.getElementById("off").innerText = off;
 
       DEVICE_CACHE.forEach(d => {
-        const isOn = (d.status === "online");
         const pos = [d.lat || 0, d.lng || 0];
-        const icon = pinIcon(d.status);
+        const virtual = d.device_id === "ROAD 2" || d.device_id === "ROAD 3";
+        const icon = pinIcon(d.status, virtual);
         const pop =
           "<b>" + d.device_id + "</b>" +
           "<br>Junction: <b>" + d.junction_name + "</b>" +
           "<br>Arm: <b>" + d.arm_name + "</b>" +
-          "<br>Status: <b style='color:" + (isOn ? "#16a34a" : "#dc2626") + "'>" + d.status + "</b>" +
+          "<br>Status: <b style='color:" + (d.status === "online" ? "#16a34a" : "#dc2626") + "'>" + d.status + "</b>" +
+          (virtual ? "<br><b style='color:#2563eb'>TEST DEVICE</b>" : "") +
           "<br>Last seen: " + new Date(d.last_seen || 0).toLocaleString();
 
         if (markers.has(d.device_id)) {
@@ -1238,7 +1294,7 @@ function renderDashboardHTML(TOKEN) {
       DEVICE_CACHE.forEach(d => {
         const opt = document.createElement("option");
         opt.value = d.device_id;
-        opt.textContent = d.device_id + " (" + d.status + ")";
+        opt.textContent = d.device_id + " (" + d.status + ")" + ((d.device_id === "ROAD 2" || d.device_id === "ROAD 3") ? " [TEST]" : "");
         devSel.appendChild(opt);
       });
 
@@ -1335,12 +1391,6 @@ function renderDashboardHTML(TOKEN) {
   }
 
   sendBtn.addEventListener("click", sendToESP);
-
-  document.getElementById("editBtn").addEventListener("click", () => {
-    showTab("msg");
-    loadEditorForSignal(sigSel.value || "red", Number(slotSel.value || 0));
-    setStatus("Edit mode loaded", true);
-  });
 
   fillForceOptions();
   fillSigOptions();
