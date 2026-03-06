@@ -1,69 +1,64 @@
-// server.js ✅ FULL WORKING (NO DATABASE VERSION)
-// LIGHT ORANGE + WHITE + TIMES NEW ROMAN
-// Devices appear only when ESP sends JSON
-// Dashboard auto updates from ESP heartbeat
-// Added AMBULANCE FORCE MODE
+// server.js
+// DISPLAY HEALTH MONITOR
+// NO DATABASE VERSION
+// DEVICES APPEAR WHEN ESP SENDS JSON
 
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({extended:true}));
 app.use(express.static("public"));
 
 
-// ======================
-// LOGIN
-// ======================
+// ================= LOGIN =================
 
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "Ibi@123";
+const ADMIN_USER="admin";
+const ADMIN_PASS="Ibi@123";
 
-const TOKENS = new Map();
-const TOKEN_TTL_MS = 30 * 60 * 1000;
+const TOKENS=new Map();
+const TOKEN_TTL=30*60*1000;
 
 function makeToken(){
-  return crypto.randomBytes(24).toString("hex");
+ return crypto.randomBytes(24).toString("hex");
 }
 
 function putToken(){
-  const t = makeToken();
-  TOKENS.set(t,{exp:Date.now()+TOKEN_TTL_MS});
-  return t;
+ const t=makeToken();
+ TOKENS.set(t,{exp:Date.now()+TOKEN_TTL});
+ return t;
 }
 
-function isValidToken(t){
-  if(!t) return false;
-  const row = TOKENS.get(t);
-  if(!row) return false;
-  if(Date.now()>row.exp){
-    TOKENS.delete(t);
-    return false;
-  }
-  return true;
+function validToken(t){
+ if(!t) return false;
+ const r=TOKENS.get(t);
+ if(!r) return false;
+ if(Date.now()>r.exp){
+   TOKENS.delete(t);
+   return false;
+ }
+ return true;
 }
 
 
-// ======================
-// MEMORY STORAGE
-// ======================
+// ================= MEMORY STORE =================
 
-const DEVICES = new Map();
-const MSGS = new Map();
+const DEVICES=new Map();
+const CLOUD=new Map();
 
-const OFFLINE_AFTER_MS = 30000;
-const MSG_SLOTS = 5;
+const OFFLINE_MS=30000;
+const MSG_SLOTS=5;
 
 
-// ======================
-// DEFAULT MESSAGE PACKS
-// ======================
+// ================= DEFAULT PACKS =================
 
 function defaultPacks(){
- return {
+
+return{
 
 red:[
 {l1:"HURRY ENDS HERE",l2:"YOUR FAMILY WAITS"},
@@ -90,11 +85,11 @@ green:[
 ],
 
 no:[
-{l1:"SIGNAL UNAVAILABLE",l2:"FOLLOW TRAFFIC RULES"},
-{l1:"NO CONTROLLER DATA",l2:"PROCEED CAREFULLY"},
 {l1:"SIGNAL HOLD",l2:"CONTROL SPEED"},
 {l1:"WAIT AND WATCH",l2:"SAFE CROSSING"},
-{l1:"MANUAL CONTROL",l2:"FOLLOW POLICE"}
+{l1:"MANUAL CONTROL",l2:"FOLLOW POLICE"},
+{l1:"SIGNAL UNAVAILABLE",l2:"FOLLOW RULES"},
+{l1:"NO CONTROLLER DATA",l2:"PROCEED CAREFULLY"}
 ],
 
 ambulance:[
@@ -105,74 +100,91 @@ ambulance:[
 {l1:"EMERGENCY PASSAGE",l2:"KEEP ROAD CLEAR"}
 ]
 
- };
+};
+
 }
 
 
-// ======================
-// AUTH
-// ======================
+// ================= AUTH =================
 
 function requireAuth(req,res,next){
- const token = req.headers["x-auth-token"];
- if(isValidToken(token)) return next();
- return res.status(401).json({error:"Unauthorized"});
+ const token=req.headers["x-auth-token"];
+ if(validToken(token)) return next();
+ res.status(401).json({error:"Unauthorized"});
 }
 
 
-// ======================
-// LOGIN PAGE
-// ======================
+// ================= HOME =================
 
 app.get("/",(req,res)=>res.redirect("/login"));
 
+
+// ================= LOGIN PAGE =================
+
 app.get("/login",(req,res)=>{
-res.send(`<!DOCTYPE html>
+
+res.send(`
+<!DOCTYPE html>
 <html>
 <head>
-<title>Login</title>
+<title>Display Health Monitor</title>
+
 <style>
+
 body{
 font-family:Times New Roman;
-background:#fff7ed;
+background:#f8efe6;
 display:flex;
-justify-content:center;
 align-items:center;
+justify-content:center;
 height:100vh;
+margin:0;
 }
-.box{
+
+.card{
+width:420px;
 background:white;
 padding:30px;
-border-radius:10px;
-border:1px solid #fed7aa;
+border-radius:18px;
+box-shadow:0 15px 40px rgba(0,0,0,0.1);
 }
+
 input{
-display:block;
+width:100%;
+padding:12px;
 margin:10px 0;
-padding:10px;
-width:250px;
+border-radius:10px;
+border:1px solid #ddd;
 }
+
 button{
-padding:10px;
+width:100%;
+padding:12px;
+border:none;
+border-radius:10px;
 background:#f97316;
 color:white;
-border:none;
+font-weight:bold;
 cursor:pointer;
 }
+
 </style>
+
 </head>
+
 <body>
 
-<div class="box">
+<div class="card">
 
 <h2>Display Health Monitor</h2>
+<p>Secure Login</p>
 
 <input id="u" placeholder="Username">
 <input id="p" type="password" placeholder="Password">
 
 <button onclick="login()">Login</button>
 
-<div id="err"></div>
+<p id="err"></p>
 
 </div>
 
@@ -180,9 +192,9 @@ cursor:pointer;
 
 async function login(){
 
-const r = await fetch("/login",{
+const r=await fetch("/login",{
 method:"POST",
-headers:{'Content-Type':'application/json'},
+headers:{"Content-Type":"application/json"},
 body:JSON.stringify({
 username:document.getElementById("u").value,
 password:document.getElementById("p").value
@@ -190,11 +202,11 @@ password:document.getElementById("p").value
 });
 
 if(!r.ok){
-document.getElementById("err").innerText="Invalid Login";
+document.getElementById("err").innerText="Invalid login";
 return;
 }
 
-const html = await r.text();
+const html=await r.text();
 
 document.open();
 document.write(html);
@@ -205,13 +217,13 @@ document.close();
 </script>
 
 </body>
-</html>`);
+</html>
+`);
+
 });
 
 
-// ======================
-// LOGIN POST
-// ======================
+// ================= LOGIN POST =================
 
 app.post("/login",(req,res)=>{
 
@@ -220,16 +232,14 @@ const {username,password}=req.body;
 if(username!==ADMIN_USER || password!==ADMIN_PASS)
 return res.status(401).json({error:"Invalid login"});
 
-const token = putToken();
+const token=putToken();
 
-res.send(renderDashboardHTML(token));
+res.send(renderDashboard(token));
 
 });
 
 
-// ======================
-// HEARTBEAT FROM ESP
-// ======================
+// ================= HEARTBEAT FROM ESP =================
 
 app.post("/heartbeat",(req,res)=>{
 
@@ -245,8 +255,8 @@ lng:lng||0,
 last_seen:Date.now()
 });
 
-if(!MSGS.has(device_id)){
-MSGS.set(device_id,{
+if(!CLOUD.has(device_id)){
+CLOUD.set(device_id,{
 force:"",
 slot:{red:0,amber:0,green:0,no:0,ambulance:0},
 packs:defaultPacks(),
@@ -259,18 +269,16 @@ res.json({ok:true});
 });
 
 
-// ======================
-// DEVICE LIST
-// ======================
+// ================= DEVICE LIST =================
 
 app.get("/devices",(req,res)=>{
 
-const now=Date.now();
 const arr=[];
+const now=Date.now();
 
 DEVICES.forEach(d=>{
 
-const online = (now-d.last_seen)<=OFFLINE_AFTER_MS;
+const online=(now-d.last_seen)<=OFFLINE_MS;
 
 arr.push({
 device_id:d.device_id,
@@ -287,63 +295,57 @@ res.json(arr);
 });
 
 
-// ======================
-// SEND MESSAGE
-// ======================
+// ================= SEND MESSAGE =================
 
 app.post("/api/simple",requireAuth,(req,res)=>{
 
 const {device_id,force,sig,slot,line1,line2}=req.body;
 
-if(!MSGS.has(device_id))
-return res.status(400).json({error:"Device not registered"});
+if(!CLOUD.has(device_id))
+return res.status(400).json({error:"device not registered"});
 
-const msg=MSGS.get(device_id);
+const m=CLOUD.get(device_id);
 
-msg.force=force||"";
+m.force=force||"";
 
-msg.packs[sig][slot]={l1:line1,l2:line2};
+m.packs[sig][slot]={l1:line1,l2:line2};
 
-msg.slot[sig]=slot;
+m.slot[sig]=slot;
 
-msg.v++;
+m.v++;
 
-MSGS.set(device_id,msg);
+CLOUD.set(device_id,m);
 
-res.json({ok:true,v:msg.v});
+res.json({ok:true,v:m.v});
 
 });
 
 
-// ======================
-// ESP PULL
-// ======================
+// ================= ESP PULL =================
 
 app.get("/api/pull/:device_id",(req,res)=>{
 
-const device_id=req.params.device_id;
+const id=req.params.device_id;
 
-if(!MSGS.has(device_id))
+if(!CLOUD.has(id))
 return res.json({changed:false});
 
-const msg=MSGS.get(device_id);
+const m=CLOUD.get(id);
 
 res.json({
 changed:true,
-force:msg.force,
-slot:msg.slot,
-packs:msg.packs,
-v:msg.v
+force:m.force,
+slot:m.slot,
+packs:m.packs,
+v:m.v
 });
 
 });
 
 
-// ======================
-// DASHBOARD HTML
-// ======================
+// ================= DASHBOARD =================
 
-function renderDashboardHTML(TOKEN){
+function renderDashboard(TOKEN){
 
 return `
 <!DOCTYPE html>
@@ -368,7 +370,7 @@ background:#fff7ed;
 }
 
 #map{
-height:90vh;
+height:100vh;
 }
 
 </style>
@@ -381,9 +383,9 @@ height:90vh;
 
 <script>
 
-const AUTH_TOKEN="${TOKEN}";
+const TOKEN="${TOKEN}";
 
-const map=L.map('map').setView([17.38,78.48],12);
+const map=L.map('map').setView([17.385,78.486],12);
 
 L.tileLayer(
 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
@@ -402,7 +404,7 @@ if(!markers.has(d.device_id)){
 
 const m=L.marker([d.lat,d.lng])
 .addTo(map)
-.bindPopup(d.device_id);
+.bindPopup(d.device_id+" "+d.status);
 
 markers.set(d.device_id,m);
 
@@ -430,12 +432,12 @@ setInterval(load,2000);
 }
 
 
-// ======================
-// START SERVER
-// ======================
+// ================= START =================
 
 const PORT=process.env.PORT||5000;
 
 app.listen(PORT,()=>{
-console.log("Server started "+PORT);
+
+console.log("Server started on "+PORT);
+
 });
