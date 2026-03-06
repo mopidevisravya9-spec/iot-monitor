@@ -57,7 +57,7 @@ const MSG_SLOTS = 5;
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-const DEVICES = new Map(); // key => final dashboard device id
+const DEVICES = new Map(); // key => final device id shown in dashboard
 const CLOUD = new Map();   // key => same device id
 
 function safeText(v) {
@@ -398,69 +398,19 @@ app.get("/devices", (req, res) => {
 });
 
 // ======================
-// SEND MESSAGE
+// APPLY TO ONE DEVICE
 // ======================
-app.post("/api/simple", requireAuth, (req, res) => {
-  try {
-    const { device_id, force, sig, slot, line1, line2, amb_slot } = req.body || {};
-    if (!device_id) return res.status(400).json({ error: "device_id required" });
+function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
+  const f = String(payload.force || "");
 
-    const key = safeText(device_id);
-    const dev = DEVICES.get(key);
-    if (!isLiveOnline(dev)) {
-      return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
-    }
+  // AUTO => only update slogans for selected signal group, no force
+  if (f === "") {
+    const s = String(payload.sig || "red");
+    if (!signals.includes(s)) throw new Error("invalid sig");
 
-    const doc = ensureCloudRow(key);
-    const now = Date.now();
-    const f = String(force || "");
-
-    if (!(f === "" || f === "red" || f === "amber" || f === "green" || f === "ambulance")) {
-      return res.status(400).json({ error: "invalid force" });
-    }
-
-    // AUTO: only restore sync, keep already edited slogans
-    if (f === "") {
-      doc.mode = "auto";
-      doc.force = "";
-      doc.ambulanceActive = false;
-      doc.ambulanceL1 = "";
-      doc.ambulanceL2 = "";
-      doc.v = Number(doc.v || 0) + 1;
-      doc.updated_at = now;
-      CLOUD.set(key, doc);
-      return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
-    }
-
-    // AMBULANCE: sticky until AUTO
-    if (f === "ambulance") {
-      const idx = clampSlot(Number(amb_slot || 0));
-      const slogans = ambulanceSlogans();
-
-      doc.mode = "ambulance";
-      doc.force = "ambulance";
-      doc.ambulanceActive = true;
-      doc.ambulanceL1 = safeText(dev.device_id) + " AMBULANCE COMING";
-      doc.ambulanceL2 = slogans[idx] || slogans[0];
-      doc.v = Number(doc.v || 0) + 1;
-      doc.updated_at = now;
-      CLOUD.set(key, doc);
-      return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
-    }
-
-    // RED / AMBER / GREEN force with slogan update
-    doc.mode = "force_" + f;
-    doc.force = f;
-    doc.ambulanceActive = false;
-    doc.ambulanceL1 = "";
-    doc.ambulanceL2 = "";
-
-    const s = String(sig || f || "red");
-    if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
-
-    const sl = clampSlot(Number(slot || 0));
-    const l1 = String(line1 || "");
-    const l2 = String(line2 || "");
+    const sl = clampSlot(Number(payload.slot || 0));
+    const l1 = String(payload.line1 || "");
+    const l2 = String(payload.line2 || "");
 
     const packs = doc.packs || defaultPacks();
     packs[s] = normalizePack(packs[s]);
@@ -471,10 +421,132 @@ app.post("/api/simple", requireAuth, (req, res) => {
     slotObj[s] = sl;
     doc.slot = slotObj;
 
+    doc.mode = "auto";
+    doc.force = "";
+    doc.ambulanceActive = false;
+    doc.ambulanceL1 = "";
+    doc.ambulanceL2 = "";
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
-    CLOUD.set(key, doc);
-    return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+    return;
+  }
+
+  // AMBULANCE => force full override
+  if (f === "ambulance") {
+    const idx = clampSlot(Number(payload.amb_slot || 0));
+    const slogans = ambulanceSlogans();
+    const sourceRoad = safeText(payload.source_device_id || dev.device_id);
+
+    doc.mode = "ambulance";
+    doc.force = "ambulance";
+    doc.ambulanceActive = true;
+    doc.ambulanceL1 = isSourceDevice
+      ? sourceRoad + " AMBULANCE COMING"
+      : "AMBULANCE FROM " + sourceRoad;
+    doc.ambulanceL2 = slogans[idx] || slogans[0];
+    doc.v = Number(doc.v || 0) + 1;
+    doc.updated_at = now;
+    return;
+  }
+
+  // RED / AMBER / GREEN => update selected group and force color
+  const s = String(payload.sig || f || "red");
+  if (!signals.includes(s)) throw new Error("invalid sig");
+
+  const sl = clampSlot(Number(payload.slot || 0));
+  const l1 = String(payload.line1 || "");
+  const l2 = String(payload.line2 || "");
+
+  const packs = doc.packs || defaultPacks();
+  packs[s] = normalizePack(packs[s]);
+  packs[s][sl] = { l1, l2 };
+  doc.packs = packs;
+
+  const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
+  slotObj[s] = sl;
+  doc.slot = slotObj;
+
+  doc.mode = "force_" + f;
+  doc.force = f;
+  doc.ambulanceActive = false;
+  doc.ambulanceL1 = "";
+  doc.ambulanceL2 = "";
+  doc.v = Number(doc.v || 0) + 1;
+  doc.updated_at = now;
+}
+
+// ======================
+// SEND MESSAGE
+// target_type = device | junction
+// target_value = device_id or junction_name
+// ======================
+app.post("/api/simple", requireAuth, (req, res) => {
+  try {
+    const payload = req.body || {};
+    const targetType = String(payload.target_type || "device");
+    const targetValue = safeText(payload.target_value || payload.device_id);
+
+    if (!targetValue) {
+      return res.status(400).json({ error: "target_value required" });
+    }
+
+    const now = Date.now();
+    let targets = [];
+
+    if (targetType === "device") {
+      const dev = DEVICES.get(targetValue);
+      if (!isLiveOnline(dev)) {
+        return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
+      }
+      targets = [dev];
+    } else if (targetType === "junction") {
+      for (const dev of DEVICES.values()) {
+        if (dev.junction_name === targetValue && isLiveOnline(dev)) {
+          targets.push(dev);
+        }
+      }
+      if (!targets.length) {
+        return res.status(400).json({ error: "No online devices found in selected junction." });
+      }
+    } else {
+      return res.status(400).json({ error: "invalid target_type" });
+    }
+
+    // Ambulance from a selected device should broadcast to the whole same junction
+    if (String(payload.force || "") === "ambulance" && payload.source_device_id) {
+      const sourceDev = DEVICES.get(String(payload.source_device_id));
+      if (!isLiveOnline(sourceDev)) {
+        return res.status(400).json({ error: "Source device is OFFLINE." });
+      }
+
+      targets = [];
+      for (const dev of DEVICES.values()) {
+        if (dev.junction_name === sourceDev.junction_name && isLiveOnline(dev)) {
+          targets.push(dev);
+        }
+      }
+      if (!targets.length) {
+        return res.status(400).json({ error: "No online devices found in source junction." });
+      }
+    }
+
+    for (const dev of targets) {
+      const doc = ensureCloudRow(dev.device_id);
+      applyMessageToDevice(
+        doc,
+        dev,
+        payload,
+        now,
+        String(dev.device_id) === String(payload.source_device_id || "")
+      );
+      CLOUD.set(dev.device_id, doc);
+    }
+
+    res.json({
+      ok: true,
+      updated_devices: targets.map(d => d.device_id),
+      count: targets.length
+    });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -578,6 +650,10 @@ function renderDashboardHTML(TOKEN) {
   .jBtn{margin-top:8px}
   .dBtn{margin-top:8px;font-weight:800}
   .indent{padding-left:12px;margin-top:6px}
+  .selectedTarget{
+    border:2px solid #f97316 !important;
+    background:#fff1e6 !important;
+  }
   .smallNote{margin-top:8px;font-size:12px;color:var(--muted);font-weight:800}
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
 
@@ -654,7 +730,7 @@ function renderDashboardHTML(TOKEN) {
     <div id="treeContainer" class="treeBox" style="display:none">
       <div class="treeTitle">Junctions (Live)</div>
       <div id="treeBody"></div>
-      <div class="smallNote">Click MESSAGES again to hide all junctions.</div>
+      <div class="smallNote">Click device = one ESP only. Click junction = all devices in that junction.</div>
     </div>
 
     <div class="footer">Powered by <b>Arcadis</b></div>
@@ -771,6 +847,11 @@ function renderDashboardHTML(TOKEN) {
   let treeVisible = false;
   let expandedJunction = null;
 
+  // target selection
+  let selectedTargetType = "device";   // device | junction
+  let selectedTargetValue = "";
+  let selectedSourceDevice = "";
+
   function logout() {
     window.location.href = "/login";
   }
@@ -837,12 +918,18 @@ function renderDashboardHTML(TOKEN) {
   function currentDeviceRow(device_id) {
     return DEVICE_CACHE.find(d => d.device_id === device_id) || null;
   }
+
   function currentDeviceStatus(device_id) {
     const d = currentDeviceRow(device_id);
     return d ? (d.status || "offline") : "offline";
   }
 
   function updateCurrentLine() {
+    if (selectedTargetType === "junction") {
+      currentLine.innerHTML = "Current: <b>JUNCTION</b> | <b>" + selectedTargetValue + "</b>";
+      return;
+    }
+
     const d = currentDeviceRow(devSel.value);
     if (!d) {
       currentLine.textContent = "Current: -";
@@ -908,9 +995,8 @@ function renderDashboardHTML(TOKEN) {
   }
 
   function updateAmbPreview() {
-    const d = currentDeviceRow(devSel.value);
-    const devName = d ? d.device_id : "DEVICE";
-    ambPreview.value = devName + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
+    const source = selectedSourceDevice || devSel.value || "ROAD";
+    ambPreview.value = source + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
   }
 
   forceSel.addEventListener("change", () => {
@@ -932,10 +1018,15 @@ function renderDashboardHTML(TOKEN) {
     autofillLines();
   });
   slotSel.addEventListener("change", autofillLines);
+
   devSel.addEventListener("change", () => {
+    selectedTargetType = "device";
+    selectedTargetValue = devSel.value;
+    selectedSourceDevice = devSel.value;
     updateCurrentLine();
     updateAmbPreview();
   });
+
   ambSel.addEventListener("change", updateAmbPreview);
 
   function buildTree() {
@@ -956,9 +1047,17 @@ function renderDashboardHTML(TOKEN) {
     Object.keys(grouped).sort().forEach(junction => {
       const jBtn = document.createElement("button");
       jBtn.className = "jBtn";
+      if (selectedTargetType === "junction" && selectedTargetValue === junction) {
+        jBtn.classList.add("selectedTarget");
+      }
       jBtn.textContent = junction + (expandedJunction === junction ? " ▲" : " ▼");
+
       jBtn.onclick = () => {
+        selectedTargetType = "junction";
+        selectedTargetValue = junction;
+        selectedSourceDevice = "";
         expandedJunction = expandedJunction === junction ? null : junction;
+        updateCurrentLine();
         buildTree();
       };
       treeBody.appendChild(jBtn);
@@ -972,11 +1071,18 @@ function renderDashboardHTML(TOKEN) {
           .forEach(dev => {
             const dBtn = document.createElement("button");
             dBtn.className = "dBtn";
+            if (selectedTargetType === "device" && selectedTargetValue === dev.device_id) {
+              dBtn.classList.add("selectedTarget");
+            }
             dBtn.textContent = dev.device_id + " (" + dev.status + ")";
             dBtn.onclick = () => {
+              selectedTargetType = "device";
+              selectedTargetValue = dev.device_id;
+              selectedSourceDevice = dev.device_id;
               devSel.value = dev.device_id;
               updateCurrentLine();
               updateAmbPreview();
+              buildTree();
               showTab("msg");
             };
             wrap.appendChild(dBtn);
@@ -1033,6 +1139,12 @@ function renderDashboardHTML(TOKEN) {
         devSel.value = DEVICE_CACHE[0].device_id;
       }
 
+      if (!selectedTargetValue && DEVICE_CACHE[0]) {
+        selectedTargetType = "device";
+        selectedTargetValue = DEVICE_CACHE[0].device_id;
+        selectedSourceDevice = DEVICE_CACHE[0].device_id;
+      }
+
       updateCurrentLine();
       updateAmbPreview();
 
@@ -1049,22 +1161,37 @@ function renderDashboardHTML(TOKEN) {
   }
 
   async function sendToESP() {
-    const device_id = devSel.value;
-    if (!device_id) {
-      setStatus("No device selected", false);
+    let targetType = selectedTargetType || "device";
+    let targetValue = selectedTargetValue || devSel.value;
+
+    if (!targetValue) {
+      setStatus("No target selected", false);
       return;
     }
 
-    const st = currentDeviceStatus(device_id);
-    if (st !== "online") {
-      setStatus("Device OFFLINE. Check device WiFi / power.", false);
-      return;
+    if (targetType === "device") {
+      const st = currentDeviceStatus(targetValue);
+      if (st !== "online") {
+        setStatus("Device OFFLINE. Check device WiFi / power.", false);
+        return;
+      }
     }
 
     const f = forceSel.value || "";
-    let payload = { device_id, force: f };
+    let payload = {
+      target_type: targetType,
+      target_value: targetValue,
+      force: f
+    };
 
     if (f === "ambulance") {
+      // ambulance must know source road
+      const sourceDev = selectedSourceDevice || devSel.value;
+      if (!sourceDev) {
+        setStatus("Select source device for ambulance", false);
+        return;
+      }
+      payload.source_device_id = sourceDev;
       payload.amb_slot = Number(ambSel.value || 0);
     } else {
       payload.sig = sigSel.value;
@@ -1092,8 +1219,8 @@ function renderDashboardHTML(TOKEN) {
       }
 
       if (f === "") setStatus("Sent | Auto mode restored", true);
-      else if (f === "ambulance") setStatus("Sent | Ambulance active", true);
-      else setStatus("Sent", true);
+      else if (f === "ambulance") setStatus("Sent | Ambulance active | " + (out.count || 0) + " device(s)", true);
+      else setStatus("Sent | " + (out.count || 0) + " device(s)", true);
     } catch (e) {
       setStatus("Network error", false);
     }
