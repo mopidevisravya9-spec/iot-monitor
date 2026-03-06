@@ -1,11 +1,13 @@
-// server.js ✅ FULL WORKING (NO RENDER ERRORS)
+// server.js ✅ FULL WORKING
 // LIGHT ORANGE+WHITE + TIMES NEW ROMAN
-// ✅ Login page (logo + username + password + powered by)
+// ✅ Login page
 // ✅ Prevent browser autofill showing username/password before typing
 // ✅ No session persistence: refresh -> login
 // ✅ Dashboard has Logout ICON (top-right)
 // ✅ Status is STATIC (changes ONLY when you click Send)
 // ✅ If device OFFLINE -> client shows error + server blocks /api/simple
+// ✅ Junction tree in MESSAGES tab
+// ✅ Keeps OLD ESP API format so red/amber/green/auto continue working
 
 const express = require("express");
 const cors = require("cors");
@@ -73,6 +75,8 @@ const MSG_SLOTS = 5;
 // ======================
 const deviceSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
+  junction_name: { type: String, default: "" },
+  arm_name: { type: String, default: "" },
   lat: { type: Number, default: 0 },
   lng: { type: Number, default: 0 },
   last_seen: { type: Number, default: 0 },
@@ -83,12 +87,11 @@ function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
 
   return {
-
     red: pack([
       ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
       ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
       ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
-      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE’S FUTURE"],
+      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE'S FUTURE"],
       ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"]
     ]),
 
@@ -115,9 +118,9 @@ function defaultPacks() {
       ["DISCIPLINED DRIVERS CREATE SAFE ROADS", "FOLLOW TRAFFIC RULES"],
       ["YOUR SPEED DECIDES SOMEONES FUTURE", "DRIVE RESPONSIBLY"]
     ])
-
   };
 }
+
 const cloudMsgSchema = new mongoose.Schema({
   device_id: { type: String, unique: true, required: true },
   force: { type: String, default: "" }, // "" | red | amber | green
@@ -288,15 +291,14 @@ app.get("/login", (req, res) => {
     </div>
 
     <form id="loginForm" autocomplete="off">
-      <!-- fake inputs to absorb autofill -->
-      <input type="text" name="fakeuser" autocomplete="username" style="display:none" />
-      <input type="password" name="fakepass" autocomplete="new-password" style="display:none" />
+      <input style="position:absolute;left:-9999px;top:-9999px" autocomplete="username">
+      <input style="position:absolute;left:-9999px;top:-9999px" type="password" autocomplete="current-password">
 
       <label>Username</label>
-      <input id="u" name="username_real" autocomplete="off" placeholder="Username" required />
+      <input id="u" placeholder="Username" autocomplete="off" autocapitalize="off" spellcheck="false" readonly>
 
       <label>Password</label>
-      <input id="p" name="password_real" type="password" autocomplete="new-password" placeholder="Password" required />
+      <input id="p" type="password" placeholder="Password" autocomplete="new-password" readonly>
 
       <button type="submit">Login</button>
       <div class="err" id="err"></div>
@@ -307,24 +309,22 @@ app.get("/login", (req, res) => {
 </div>
 
 <script>
-  // no localStorage/cookies token -> refresh always shows login
   const form = document.getElementById("loginForm");
   const err  = document.getElementById("err");
+  const u = document.getElementById("u");
+  const p = document.getElementById("p");
 
-  // extra hard block for autofill
-  window.addEventListener("load", ()=>{
-    try{
-      document.getElementById("u").value = "";
-      document.getElementById("p").value = "";
-    }catch(e){}
-  });
+  function unlock(){ u.removeAttribute("readonly"); p.removeAttribute("readonly"); }
+  u.addEventListener("focus", unlock, { once:true });
+  p.addEventListener("focus", unlock, { once:true });
+  window.addEventListener("load", ()=>{ u.value=""; p.value=""; });
 
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
 
-    const username = document.getElementById("u").value.trim();
-    const password = document.getElementById("p").value;
+    const username = u.value.trim();
+    const password = p.value;
 
     try{
       const r = await fetch("/login",{
@@ -353,7 +353,7 @@ app.get("/login", (req, res) => {
 });
 
 // ======================
-// LOGIN (POST) -> return dashboard HTML with token injected
+// LOGIN (POST)
 // ======================
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
@@ -364,25 +364,30 @@ app.post("/login", (req, res) => {
   return res.send(renderDashboardHTML(token));
 });
 
-// refresh /dashboard -> go login
+// refresh /dashboard -> login
 app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // DEVICE REGISTER + HEARTBEAT
+// ESP can send:
+// { device_id, lat, lng, junction_name, arm_name }
 // ======================
 app.post("/register", async (req, res) => {
   try {
-    const { device_id, lat, lng } = req.body || {};
+    const { device_id, lat, lng, junction_name, arm_name } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
+
     const doc = await Device.findOneAndUpdate(
       { device_id },
       {
         $setOnInsert: { device_id },
         $set: {
-          lat: typeof lat === "number" ? lat : 0,
-          lng: typeof lng === "number" ? lng : 0,
+          junction_name: String(junction_name || ""),
+          arm_name: String(arm_name || ""),
+          lat: typeof lat === "number" ? lat : Number(lat || 0),
+          lng: typeof lng === "number" ? lng : Number(lng || 0),
           last_seen: now,
           status: "online",
         },
@@ -399,18 +404,21 @@ app.post("/register", async (req, res) => {
 
 app.post("/heartbeat", async (req, res) => {
   try {
-    const { device_id, lat, lng } = req.body || {};
+    const { device_id, lat, lng, junction_name, arm_name } = req.body || {};
     if (!device_id) return res.status(400).json({ error: "device_id required" });
 
     const now = Date.now();
+
     await Device.findOneAndUpdate(
       { device_id },
       {
         $set: {
           last_seen: now,
           status: "online",
-          ...(typeof lat === "number" ? { lat } : {}),
-          ...(typeof lng === "number" ? { lng } : {}),
+          ...(junction_name !== undefined ? { junction_name: String(junction_name || "") } : {}),
+          ...(arm_name !== undefined ? { arm_name: String(arm_name || "") } : {}),
+          ...(lat !== undefined ? { lat: Number(lat || 0) } : {}),
+          ...(lng !== undefined ? { lng: Number(lng || 0) } : {}),
         },
       },
       { upsert: true, new: true }
@@ -433,7 +441,8 @@ app.get("/devices", async (req, res) => {
       { last_seen: { $lt: now - OFFLINE_AFTER_MS } },
       { $set: { status: "offline" } }
     );
-    const data = await Device.find().sort({ last_seen: -1 });
+
+    const data = await Device.find().sort({ junction_name: 1, arm_name: 1, last_seen: -1 });
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -441,7 +450,9 @@ app.get("/devices", async (req, res) => {
 });
 
 // ======================
-// CLOUD MESSAGE API (PROTECTED + BLOCK OFFLINE)
+// CLOUD MESSAGE API
+// IMPORTANT:
+// This keeps the OLD working structure for ESP.
 // ======================
 app.post("/api/simple", requireAuth, async (req, res) => {
   try {
@@ -490,7 +501,12 @@ app.post("/api/simple", requireAuth, async (req, res) => {
   }
 });
 
-// ESP pull (no auth)
+// ======================
+// ESP PULL
+// IMPORTANT:
+// This is the old working response format.
+// Do not break this unless ESP firmware also changes.
+// ======================
 app.get("/api/pull/:device_id", async (req, res) => {
   try {
     const device_id = req.params.device_id;
@@ -544,10 +560,11 @@ function renderDashboardHTML(TOKEN) {
   }
   .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
   .sidebar{
-    width:260px;min-width:260px;background:var(--card);
+    width:320px;min-width:320px;background:var(--card);
     border:1px solid var(--border);border-radius:16px;
     display:flex;flex-direction:column;padding:14px 12px;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
+    overflow:auto;
   }
   .brand{display:flex;align-items:center;gap:10px;padding:6px 6px 10px 6px}
   .brand img{
@@ -569,6 +586,21 @@ function renderDashboardHTML(TOKEN) {
     color:#fff;border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
+
+  .treeBox{
+    margin-top:12px;border:1px solid var(--border);border-radius:14px;
+    background:#fffaf5;padding:10px;
+  }
+  .treeTitle{font-weight:900;margin-bottom:8px}
+  .jBtn,.dBtn{
+    width:100%;text-align:left;padding:10px 12px;border-radius:12px;
+    border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:900;
+  }
+  .jBtn{margin-top:8px}
+  .dBtn{margin-top:8px;font-weight:800}
+  .indent{padding-left:12px;margin-top:6px}
+  .smallNote{margin-top:8px;font-size:12px;color:var(--muted);font-weight:800}
+
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
 
   .content{
@@ -578,7 +610,6 @@ function renderDashboardHTML(TOKEN) {
     position:relative;
   }
 
-  /* Top bar + logout icon button */
   .topbar{
     height:54px;display:flex;align-items:center;justify-content:flex-end;
     padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
@@ -610,7 +641,7 @@ function renderDashboardHTML(TOKEN) {
   #map{flex:1}
   .pad{padding:12px}
   .panel{
-    max-width:1050px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
+    max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff
   }
   .h1{font-weight:900;font-size:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
@@ -628,11 +659,6 @@ function renderDashboardHTML(TOKEN) {
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
-  @media (max-width: 980px){
-    .sidebar{width:220px;min-width:220px}
-    .card{flex:1 1 160px}
-    .grid{grid-template-columns:1fr}
-  }
 </style>
 </head>
 
@@ -647,15 +673,22 @@ function renderDashboardHTML(TOKEN) {
       </div>
     </div>
     <div class="divider"></div>
-    <div class="tabBtn active" id="tabMapBtn" onclick="showTab('map')">MAP</div>
-    <div class="tabBtn" id="tabMsgBtn" onclick="showTab('msg')">MESSAGES</div>
+
+    <div class="tabBtn active" id="tabMapBtn">MAP</div>
+    <div class="tabBtn" id="tabMsgBtn">MESSAGES</div>
+
+    <div id="treeContainer" class="treeBox" style="display:none">
+      <div class="treeTitle">Junctions (Auto)</div>
+      <div id="treeBody"></div>
+      <div class="smallNote">Click MESSAGES again to hide all junctions.</div>
+    </div>
+
     <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
 
   <div class="content">
     <div class="topbar">
       <button class="iconBtn" onclick="logout()" title="Logout" aria-label="Logout">
-        <!-- logout icon -->
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10 17l1.41-1.41L8.83 13H20v-2H8.83l2.58-2.59L10 7l-5 5 5 5z"></path>
           <path d="M4 4h8V2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h8v-2H4V4z"></path>
@@ -678,8 +711,9 @@ function renderDashboardHTML(TOKEN) {
 
           <div class="grid">
             <div>
-              <div class="lbl">Device</div>
+              <div class="lbl">Device (selected)</div>
               <select id="devSel"></select>
+              <div class="statusLine" id="currentLine">Current: -</div>
             </div>
             <div>
               <div class="lbl">Force</div>
@@ -715,34 +749,69 @@ function renderDashboardHTML(TOKEN) {
           </div>
 
           <div class="row">
-            <button class="sendBtn" onclick="sendToESP()">Send to ESP</button>
+            <button class="sendBtn" id="sendBtn">Send to ESP</button>
           </div>
 
-          <!-- STATIC STATUS: changes ONLY on Send -->
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
 <script>
   const AUTH_TOKEN = "${TOKEN}";
-  try{ history.replaceState({}, "", "/dashboard"); }catch(e){}
+  try { history.replaceState({}, "", "/dashboard"); } catch(e) {}
 
-  function logout(){
+  const tabMapBtn = document.getElementById("tabMapBtn");
+  const tabMsgBtn = document.getElementById("tabMsgBtn");
+  const viewMap = document.getElementById("viewMap");
+  const viewMsg = document.getElementById("viewMsg");
+  const treeContainer = document.getElementById("treeContainer");
+  const treeBody = document.getElementById("treeBody");
+
+  const devSel = document.getElementById("devSel");
+  const sigSel = document.getElementById("sigSel");
+  const slotSel = document.getElementById("slotSel");
+  const line1 = document.getElementById("line1");
+  const line2 = document.getElementById("line2");
+  const forceSel = document.getElementById("forceSel");
+  const statusTxt = document.getElementById("statusTxt");
+  const currentLine = document.getElementById("currentLine");
+  const sendBtn = document.getElementById("sendBtn");
+
+  let DEVICE_CACHE = [];
+  let treeVisible = false;
+  let expandedJunction = null;
+
+  function logout() {
     window.location.href = "/login";
   }
 
-  function showTab(which){
-    document.getElementById("tabMapBtn").classList.toggle("active", which==="map");
-    document.getElementById("tabMsgBtn").classList.toggle("active", which==="msg");
-    document.getElementById("viewMap").classList.toggle("active", which==="map");
-    document.getElementById("viewMsg").classList.toggle("active", which==="msg");
-    if(which==="map"){ setTimeout(()=>map.invalidateSize(), 150); }
-    // ✅ DO NOT TOUCH STATUS HERE
+  function setStatus(text, ok) {
+    statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
   }
+
+  function showTab(which) {
+    tabMapBtn.classList.toggle("active", which === "map");
+    tabMsgBtn.classList.toggle("active", which === "msg");
+    viewMap.classList.toggle("active", which === "map");
+    viewMsg.classList.toggle("active", which === "msg");
+    if (which === "map") setTimeout(() => map.invalidateSize(), 150);
+  }
+
+  tabMapBtn.addEventListener("click", () => {
+    treeVisible = false;
+    treeContainer.style.display = "none";
+    showTab("map");
+  });
+
+  tabMsgBtn.addEventListener("click", () => {
+    showTab("msg");
+    treeVisible = !treeVisible;
+    treeContainer.style.display = treeVisible ? "block" : "none";
+    if (treeVisible) buildTree();
+  });
 
   const map = L.map('map').setView([17.3850,78.4867], 12);
   L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
@@ -773,27 +842,29 @@ function renderDashboardHTML(TOKEN) {
     {k:"no",    name:"NO SIGNAL"}
   ];
 
-  const devSel = document.getElementById("devSel");
-  const sigSel = document.getElementById("sigSel");
-  const slotSel= document.getElementById("slotSel");
-  const line1  = document.getElementById("line1");
-  const line2  = document.getElementById("line2");
-  const forceSel = document.getElementById("forceSel");
-  const statusTxt = document.getElementById("statusTxt");
-
-  let DEVICE_CACHE = [];
-
-  // ✅ STATUS LOCK: only changes when Send is clicked
-  let STATUS_LOCKED = false;
-
-  function setStatus(text, ok){
-    STATUS_LOCKED = true;
-    statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
+  function currentDeviceRow(device_id) {
+    return DEVICE_CACHE.find(d => d.device_id === device_id) || null;
   }
 
-  function fillSigOptions(){
+  function currentDeviceStatus(device_id) {
+    const d = currentDeviceRow(device_id);
+    return d ? (d.status || "offline") : "offline";
+  }
+
+  function updateCurrentLine() {
+    const d = currentDeviceRow(devSel.value);
+    if (!d) {
+      currentLine.textContent = "Current: -";
+      return;
+    }
+    const j = d.junction_name || "Unknown Junction";
+    const a = d.arm_name ? (" | " + d.arm_name) : "";
+    currentLine.innerHTML = "Current: <b>" + d.device_id + "</b> | <b>" + (d.status || "offline").toUpperCase() + "</b> | " + j + a;
+  }
+
+  function fillSigOptions() {
     sigSel.innerHTML = "";
-    SIGS.forEach(s=>{
+    SIGS.forEach(s => {
       const o = document.createElement("option");
       o.value = s.k;
       o.textContent = s.name;
@@ -801,94 +872,138 @@ function renderDashboardHTML(TOKEN) {
     });
   }
 
-  function fillSlotOptions(){
+  function fillSlotOptions() {
     const sig = sigSel.value;
     slotSel.innerHTML = "";
-    for(let i=0;i<MSG_SLOTS;i++){
+    for (let i = 0; i < MSG_SLOTS; i++) {
       const o = document.createElement("option");
       o.value = String(i);
-      const t = templates[sig][i]?.l1 || ("Message " + (i+1));
-      o.textContent = (i+1) + ". " + t;
+      const t = templates[sig]?.[i]?.l1 || ("Message " + (i + 1));
+      o.textContent = (i + 1) + ". " + t;
       slotSel.appendChild(o);
     }
   }
 
-  function autofillLines(){
+  function autofillLines() {
     const sig = sigSel.value;
-    const sl  = Number(slotSel.value||0);
-    const t = (templates[sig] && templates[sig][sl]) ? templates[sig][sl] : {l1:"",l2:""};
+    const sl = Number(slotSel.value || 0);
+    const t = templates[sig]?.[sl] || { l1:"", l2:"" };
     line1.value = t.l1 || "";
     line2.value = t.l2 || "";
   }
 
-  sigSel.addEventListener("change", ()=>{ fillSlotOptions(); autofillLines(); });
+  sigSel.addEventListener("change", () => {
+    fillSlotOptions();
+    autofillLines();
+  });
   slotSel.addEventListener("change", autofillLines);
+  devSel.addEventListener("change", updateCurrentLine);
 
-  async function loadDevices(forceRefresh){
-    try{
+  function buildTree() {
+    treeBody.innerHTML = "";
+
+    const grouped = {};
+    DEVICE_CACHE.forEach(d => {
+      const j = d.junction_name || "Unknown Junction";
+      if (!grouped[j]) grouped[j] = [];
+      grouped[j].push(d);
+    });
+
+    Object.keys(grouped).sort().forEach(junction => {
+      const jBtn = document.createElement("button");
+      jBtn.className = "jBtn";
+      jBtn.textContent = junction + (expandedJunction === junction ? " ▲" : " ▼");
+      jBtn.onclick = () => {
+        expandedJunction = expandedJunction === junction ? null : junction;
+        buildTree();
+      };
+      treeBody.appendChild(jBtn);
+
+      if (expandedJunction === junction) {
+        const wrap = document.createElement("div");
+        wrap.className = "indent";
+
+        grouped[junction]
+          .sort((a,b)=>(a.device_id || "").localeCompare(b.device_id || ""))
+          .forEach(dev => {
+            const dBtn = document.createElement("button");
+            dBtn.className = "dBtn";
+            dBtn.textContent = dev.device_id + " (" + dev.status + ")";
+            dBtn.onclick = () => {
+              devSel.value = dev.device_id;
+              updateCurrentLine();
+              showTab("msg");
+            };
+            wrap.appendChild(dBtn);
+          });
+
+        treeBody.appendChild(wrap);
+      }
+    });
+  }
+
+  async function loadDevices(forceRefresh) {
+    try {
       const res = await fetch("/devices", { cache: forceRefresh ? "no-store" : "default" });
       const data = await res.json();
       DEVICE_CACHE = Array.isArray(data) ? data : [];
 
-      let on=0, off=0;
-      DEVICE_CACHE.forEach(d=> (d.status==="online"?on++:off++));
+      let on = 0, off = 0;
+      DEVICE_CACHE.forEach(d => (d.status === "online" ? on++ : off++));
       document.getElementById("total").innerText = DEVICE_CACHE.length;
       document.getElementById("on").innerText = on;
       document.getElementById("off").innerText = off;
 
-      DEVICE_CACHE.forEach(d=>{
-        const isOn = (d.status==="online");
+      DEVICE_CACHE.forEach(d => {
+        const isOn = (d.status === "online");
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status);
         const pop =
-          "<b>"+d.device_id+"</b>" +
-          "<br>Status: <b style='color:"+(isOn?"#16a34a":"#dc2626")+"'>"+d.status+"</b>" +
-          "<br>Last seen: " + new Date(d.last_seen||0).toLocaleString();
+          "<b>" + d.device_id + "</b>" +
+          "<br>Junction: <b>" + (d.junction_name || "Unknown Junction") + "</b>" +
+          (d.arm_name ? "<br>Arm: <b>" + d.arm_name + "</b>" : "") +
+          "<br>Status: <b style='color:" + (isOn ? "#16a34a" : "#dc2626") + "'>" + d.status + "</b>" +
+          "<br>Last seen: " + new Date(d.last_seen || 0).toLocaleString();
 
-        if(markers.has(d.device_id)){
+        if (markers.has(d.device_id)) {
           markers.get(d.device_id).setLatLng(pos).setIcon(icon).setPopupContent(pop);
-        }else{
-          const m = L.marker(pos,{icon}).addTo(map).bindPopup(pop);
-          markers.set(d.device_id,m);
+        } else {
+          const m = L.marker(pos, { icon }).addTo(map).bindPopup(pop);
+          markers.set(d.device_id, m);
         }
       });
 
       const cur = devSel.value;
       devSel.innerHTML = "";
-      DEVICE_CACHE.forEach(d=>{
+      DEVICE_CACHE.forEach(d => {
         const opt = document.createElement("option");
         opt.value = d.device_id;
         opt.textContent = d.device_id + " (" + d.status + ")";
         devSel.appendChild(opt);
       });
-      if(cur) devSel.value = cur;
 
-      // ✅ DO NOT set status here (keeps it static)
-    }catch(e){
-      if(!STATUS_LOCKED){
-        // only show this if user never pressed send
-        statusTxt.innerHTML = "Status: Network issue <span class='bad'>✗</span>";
+      if (cur && DEVICE_CACHE.some(d => d.device_id === cur)) {
+        devSel.value = cur;
+      } else if (DEVICE_CACHE[0]) {
+        devSel.value = DEVICE_CACHE[0].device_id;
       }
+
+      updateCurrentLine();
+      if (treeVisible) buildTree();
+    } catch (e) {
+      // keep status static
     }
   }
 
-  function currentDeviceStatus(device_id){
-    const d = DEVICE_CACHE.find(x=>x.device_id===device_id);
-    return d ? (d.status||"offline") : "offline";
-  }
-
-  async function sendToESP(){
-    // user clicked Send -> allow new status updates
-    STATUS_LOCKED = false;
-
+  async function sendToESP() {
     const device_id = devSel.value;
-    if(!device_id){
+    if (!device_id) {
       setStatus("No device selected", false);
       return;
     }
 
     const st = currentDeviceStatus(device_id);
-    if(st !== "online"){
+    if (st !== "online") {
       setStatus("Device OFFLINE. Check device WiFi / power.", false);
       return;
     }
@@ -897,14 +1012,14 @@ function renderDashboardHTML(TOKEN) {
       device_id,
       force: forceSel.value || "",
       sig: sigSel.value,
-      slot: Number(slotSel.value||0),
+      slot: Number(slotSel.value || 0),
       line1: line1.value || "",
       line2: line2.value || ""
     };
 
     setStatus("Sending...", true);
 
-    try{
+    try {
       const r = await fetch("/api/simple", {
         method:"POST",
         headers:{
@@ -914,28 +1029,34 @@ function renderDashboardHTML(TOKEN) {
         body: JSON.stringify(payload)
       });
 
-      const out = await r.json().catch(()=> ({}));
-      if(!r.ok){
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) {
         setStatus(out.error || "Send failed", false);
         return;
       }
-      setStatus("Sent", true);
-    }catch(e){
+
+      if ((forceSel.value || "") === "") setStatus("Sent | Auto mode restored", true);
+      else setStatus("Sent", true);
+
+    } catch (e) {
       setStatus("Network error", false);
     }
   }
+
+  sendBtn.addEventListener("click", sendToESP);
 
   fillSigOptions();
   fillSlotOptions();
   autofillLines();
 
+  showTab("map");
   loadDevices(true);
-  setInterval(()=>loadDevices(false), 2000);
+  setInterval(() => loadDevices(false), 2000);
 
   const img = document.getElementById("arcLogo");
-  img.addEventListener("error", ()=>{
-    if(img.src.endsWith("/arcadis.png")) img.src="/image.png";
-    else if(img.src.endsWith("/image.png")) img.src="/logo.png";
+  img.addEventListener("error", () => {
+    if (img.src.endsWith("/arcadis.png")) img.src = "/image.png";
+    else if (img.src.endsWith("/image.png")) img.src = "/logo.png";
   });
 </script>
 </body>
