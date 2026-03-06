@@ -40,7 +40,7 @@ setInterval(() => {
   for (const [t, row] of TOKENS.entries()) {
     if (now > row.exp) TOKENS.delete(t);
   }
-}, 60 * 1000);
+}, 60000);
 
 function requireAuth(req, res, next) {
   const token = req.headers["x-auth-token"];
@@ -57,8 +57,8 @@ const MSG_SLOTS = 5;
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-const DEVICES = new Map(); // key = final device_id shown in dashboard
-const CLOUD = new Map();   // key = same device_id
+const DEVICES = new Map(); // key => final device_id shown in dashboard
+const CLOUD = new Map();   // key => same final device_id
 
 function safeText(v) {
   return String(v || "").trim();
@@ -144,7 +144,10 @@ function ensureCloudRow(device_id) {
       slot: { red: 0, amber: 0, green: 0, no: 0 },
       packs: defaultPacks(),
       v: 0,
-      updated_at: 0
+      updated_at: 0,
+      ambulanceActive: false,
+      ambulanceL1: "",
+      ambulanceL2: ""
     });
   }
   return CLOUD.get(device_id);
@@ -331,25 +334,19 @@ app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // REGISTER / HEARTBEAT
-// accepts:
-// junction OR junction_name
+// accepts both:
+// junction_name / junction
 // arm_name optional
-// device_id becomes display device if arm missing
-// if arm_name exists, dashboard displays arm_name instead of ESP_001
 // ======================
 function upsertLiveDevice(req, res) {
   try {
     const body = req.body || {};
-
     const rawDeviceId = safeText(body.device_id);
     if (!rawDeviceId) return res.status(400).json({ error: "device_id required" });
 
     const jn = safeText(body.junction_name || body.junction);
     const arm = safeText(body.arm_name);
 
-    // Final display device name:
-    // if arm_name exists -> use it
-    // else use device_id
     const finalDeviceId = arm || rawDeviceId;
 
     const old = DEVICES.get(finalDeviceId) || {};
@@ -364,7 +361,6 @@ function upsertLiveDevice(req, res) {
       status: "online"
     };
 
-    // remove old raw entry if raw id and final id differ
     if (rawDeviceId !== finalDeviceId) {
       DEVICES.delete(rawDeviceId);
       if (CLOUD.has(rawDeviceId) && !CLOUD.has(finalDeviceId)) {
@@ -421,8 +417,7 @@ app.get("/devices", (req, res) => {
 
 // ======================
 // SEND MESSAGE
-// red/amber/green keep old ESP structure
-// ambulance sent as RED-compatible packet
+// ambulance stays active until AUTO is sent
 // ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
@@ -445,6 +440,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
     if (f === "") {
       doc.force = "";
+      doc.ambulanceActive = false;
       doc.v = Number(doc.v || 0) + 1;
       doc.updated_at = now;
       CLOUD.set(key, doc);
@@ -455,28 +451,22 @@ app.post("/api/simple", requireAuth, (req, res) => {
       const idx = clampSlot(Number(amb_slot || 0));
       const slogans = ambulanceSlogans();
 
-      // compatibility with old ESP:
-      // use RED force and RED slot
-      doc.force = "red";
+      doc.force = "ambulance";
+      doc.ambulanceActive = true;
+      doc.ambulanceL1 = safeText(dev.device_id) + " STOP";
+      doc.ambulanceL2 = slogans[idx] || slogans[0];
 
-      const packs = doc.packs || defaultPacks();
-      packs.red = normalizePack(packs.red);
-
-      packs.red[idx] = {
-        l1: safeText(dev.device_id) + " STOP",
-        l2: slogans[idx] || slogans[0]
-      };
-
-      doc.packs = packs;
-      doc.slot.red = idx;
       doc.v = Number(doc.v || 0) + 1;
       doc.updated_at = now;
-
       CLOUD.set(key, doc);
+
       return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
     }
 
     doc.force = f;
+    doc.ambulanceActive = false;
+    doc.ambulanceL1 = "";
+    doc.ambulanceL2 = "";
 
     const s = String(sig || "red");
     if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
@@ -506,14 +496,11 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
 // ======================
 // ESP PULL
-// old working format
 // ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
     const raw = safeText(req.params.device_id);
-
-    // if Road 1 is stored, use Road 1
-    const key = DEVICES.has(raw) ? raw : raw;
+    const key = raw;
     const since = Number(req.query.since || 0);
 
     const doc = ensureCloudRow(key);
@@ -531,6 +518,9 @@ app.get("/api/pull/:device_id", (req, res) => {
       packs: doc.packs || defaultPacks(),
       slots: MSG_SLOTS,
       updated_at: doc.updated_at || 0,
+      ambulanceActive: !!doc.ambulanceActive,
+      ambulanceL1: doc.ambulanceL1 || "",
+      ambulanceL2: doc.ambulanceL2 || ""
     });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -624,7 +614,6 @@ function renderDashboardHTML(TOKEN) {
     cursor:pointer;
   }
   .iconBtn svg{width:20px;height:20px;fill:#fff}
-
   .cards{
     display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
     background:#fff;flex-wrap:wrap;
@@ -820,6 +809,11 @@ function renderDashboardHTML(TOKEN) {
 
   tabMsgBtn.addEventListener("click", () => {
     showTab("msg");
+    if (DEVICE_CACHE.length === 0) {
+      treeVisible = false;
+      treeContainer.style.display = "none";
+      return;
+    }
     treeVisible = !treeVisible;
     treeContainer.style.display = treeVisible ? "block" : "none";
     if (treeVisible) buildTree();
@@ -960,6 +954,12 @@ function renderDashboardHTML(TOKEN) {
   ambSel.addEventListener("change", updateAmbPreview);
 
   function buildTree() {
+    if (DEVICE_CACHE.length === 0) {
+      treeContainer.style.display = "none";
+      treeVisible = false;
+      return;
+    }
+
     treeBody.innerHTML = "";
 
     const grouped = {};
@@ -1051,7 +1051,14 @@ function renderDashboardHTML(TOKEN) {
 
       updateCurrentLine();
       updateAmbPreview();
-      if (treeVisible) buildTree();
+
+      if (DEVICE_CACHE.length === 0) {
+        treeContainer.style.display = "none";
+        treeVisible = false;
+      } else if (treeVisible) {
+        treeContainer.style.display = "block";
+        buildTree();
+      }
     } catch (e) {
       // keep status static
     }
