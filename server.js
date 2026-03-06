@@ -57,8 +57,8 @@ const MSG_SLOTS = 5;
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-const DEVICES = new Map(); // key => final device_id shown in dashboard
-const CLOUD = new Map();   // key => same final device_id
+const DEVICES = new Map(); // key => final dashboard device id
+const CLOUD = new Map();   // key => same device id
 
 function safeText(v) {
   return String(v || "").trim();
@@ -74,7 +74,6 @@ function normArm(v) {
 
 function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
-
   return {
     red: pack([
       ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
@@ -140,6 +139,7 @@ function ensureCloudRow(device_id) {
   if (!CLOUD.has(device_id)) {
     CLOUD.set(device_id, {
       device_id,
+      mode: "auto", // auto | force_red | force_amber | force_green | ambulance
       force: "",
       slot: { red: 0, amber: 0, green: 0, no: 0 },
       packs: defaultPacks(),
@@ -148,9 +148,6 @@ function ensureCloudRow(device_id) {
       ambulanceActive: false,
       ambulanceL1: "",
       ambulanceL2: ""
-            ambulanceRoad: "",
-      ambulancePersistent: false,
-      ambulanceColor: "blue"
     });
   }
   return CLOUD.get(device_id);
@@ -199,7 +196,7 @@ app.get("/login", (req, res) => {
   .wrap{height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
   .card{
     width:min(520px, 94vw);
-    background:linear-gradient(180deg,#ffffff, #fffaf5);
+    background:linear-gradient(180deg,#ffffff,#fffaf5);
     border:1px solid var(--border);
     border-radius:18px;
     box-shadow:0 20px 40px rgba(17,24,39,.12);
@@ -230,17 +227,13 @@ app.get("/login", (req, res) => {
   form{margin-top:16px;position:relative}
   label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}
   input{
-    width:100%;padding:12px 12px;border-radius:14px;
-    border:1px solid var(--border);background:#fff;
-    font-family:"Times New Roman", Times, serif;font-size:15px;
-    outline:none;
+    width:100%;padding:12px;border-radius:14px;border:1px solid var(--border);
+    background:#fff;font-family:"Times New Roman", Times, serif;font-size:15px;outline:none;
   }
   button{
-    width:100%;margin-top:14px;padding:12px;border-radius:14px;
-    border:1px solid var(--orange2);
+    width:100%;margin-top:14px;padding:12px;border-radius:14px;border:1px solid var(--orange2);
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;font-weight:900;font-size:15px;
-    cursor:pointer;
+    color:#fff;font-weight:900;font-size:15px;cursor:pointer;
     box-shadow:0 14px 26px rgba(249,115,22,.25);
   }
   .err{margin-top:10px;color:#dc2626;font-weight:800;font-size:13px;min-height:18px}
@@ -264,8 +257,7 @@ app.get("/login", (req, res) => {
       <input style="position:absolute;left:-9999px;top:-9999px" type="password" autocomplete="current-password">
 
       <label>Username</label>
-      <input id="u" placeholder="Username" autocomplete="off" autocapitalize="off" spellcheck="false" readonly>
-
+      <input id="u" placeholder="Username" autocomplete="off" readonly>
       <label>Password</label>
       <input id="p" type="password" placeholder="Password" autocomplete="new-password" readonly>
 
@@ -282,7 +274,6 @@ app.get("/login", (req, res) => {
   const err  = document.getElementById("err");
   const u = document.getElementById("u");
   const p = document.getElementById("p");
-
   function unlock(){ u.removeAttribute("readonly"); p.removeAttribute("readonly"); }
   u.addEventListener("focus", unlock, { once:true });
   p.addEventListener("focus", unlock, { once:true });
@@ -291,23 +282,17 @@ app.get("/login", (req, res) => {
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
     err.textContent = "";
-
     try{
       const r = await fetch("/login",{
         method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({
-          username: u.value.trim(),
-          password: p.value
-        })
+        body: JSON.stringify({ username: u.value.trim(), password: p.value })
       });
-
       if(!r.ok){
         const out = await r.json().catch(()=>({}));
         err.textContent = out.error || "Invalid login";
         return;
       }
-
       const html = await r.text();
       document.open();
       document.write(html);
@@ -337,9 +322,6 @@ app.get("/dashboard", (req, res) => res.redirect("/login"));
 
 // ======================
 // REGISTER / HEARTBEAT
-// accepts both:
-// junction_name / junction
-// arm_name optional
 // ======================
 function upsertLiveDevice(req, res) {
   try {
@@ -391,7 +373,6 @@ app.post("/heartbeat", upsertLiveDevice);
 app.get("/devices", (req, res) => {
   try {
     cleanDeadDevices();
-
     const out = [];
     for (const d of DEVICES.values()) {
       out.push({
@@ -404,14 +385,12 @@ app.get("/devices", (req, res) => {
         status: isLiveOnline(d) ? "online" : "offline"
       });
     }
-
     out.sort((a, b) => {
       const ja = String(a.junction_name || "");
       const jb = String(b.junction_name || "");
       if (ja !== jb) return ja.localeCompare(jb);
       return String(a.device_id || "").localeCompare(String(b.device_id || ""));
     });
-
     res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -420,7 +399,6 @@ app.get("/devices", (req, res) => {
 
 // ======================
 // SEND MESSAGE
-// ambulance stays active until AUTO is sent
 // ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
@@ -441,58 +419,43 @@ app.post("/api/simple", requireAuth, (req, res) => {
       return res.status(400).json({ error: "invalid force" });
     }
 
+    // AUTO: only restore sync, keep already edited slogans
     if (f === "") {
+      doc.mode = "auto";
       doc.force = "";
       doc.ambulanceActive = false;
-      doc.ambulancePersistent = false;
-      doc.ambulanceRoad = "";
-      doc.ambulanceColor = "";
+      doc.ambulanceL1 = "";
+      doc.ambulanceL2 = "";
       doc.v = Number(doc.v || 0) + 1;
       doc.updated_at = now;
       CLOUD.set(key, doc);
       return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
     }
 
-     if (f === "ambulance") {
-
+    // AMBULANCE: sticky until AUTO
+    if (f === "ambulance") {
       const idx = clampSlot(Number(amb_slot || 0));
       const slogans = ambulanceSlogans();
 
+      doc.mode = "ambulance";
       doc.force = "ambulance";
       doc.ambulanceActive = true;
-      doc.ambulancePersistent = true;
-
-      doc.ambulanceRoad = safeText(dev.device_id);
-
-  // static line
-      doc.ambulanceL1 = "AMBULANCE ARRIVING " + doc.ambulanceRoad;
-
-  // scrolling line
+      doc.ambulanceL1 = safeText(dev.device_id) + " AMBULANCE COMING";
       doc.ambulanceL2 = slogans[idx] || slogans[0];
-
-  // display color instruction
-      doc.ambulanceColor = "blue";
-
       doc.v = Number(doc.v || 0) + 1;
       doc.updated_at = now;
-
       CLOUD.set(key, doc);
+      return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+    }
 
-      return res.json({
-      ok: true,
-      ambulance: true,
-      road: doc.ambulanceRoad,
-      v: doc.v,
-      updated_at: doc.updated_at
-  });
-}
-
+    // RED / AMBER / GREEN force with slogan update
+    doc.mode = "force_" + f;
     doc.force = f;
     doc.ambulanceActive = false;
     doc.ambulanceL1 = "";
     doc.ambulanceL2 = "";
 
-    const s = String(sig || "red");
+    const s = String(sig || f || "red");
     if (!signals.includes(s)) return res.status(400).json({ error: "invalid sig" });
 
     const sl = clampSlot(Number(slot || 0));
@@ -510,9 +473,8 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
-
     CLOUD.set(key, doc);
-    res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
+    return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -523,8 +485,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
 // ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
-    const raw = safeText(req.params.device_id);
-    const key = raw;
+    const key = safeText(req.params.device_id);
     const since = Number(req.query.since || 0);
 
     const doc = ensureCloudRow(key);
@@ -533,22 +494,20 @@ app.get("/api/pull/:device_id", (req, res) => {
     if (since >= v) return res.json({ ok: true, changed: false, v });
 
     res.json({
-  ok: true,
-  changed: true,
-  device_id: key,
-  v,
-  force: doc.force || "",
-  slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
-  packs: doc.packs || defaultPacks(),
-  slots: MSG_SLOTS,
-  updated_at: doc.updated_at || 0,
-  ambulanceActive: !!doc.ambulanceActive,
-  ambulanceRoad: doc.ambulanceRoad || "",
-  ambulancePersistent: !!doc.ambulancePersistent,
-  ambulanceColor: doc.ambulanceColor || "blue",
-  ambulanceL1: doc.ambulanceL1 || "",
-  ambulanceL2: doc.ambulanceL2 || ""
-});
+      ok: true,
+      changed: true,
+      device_id: key,
+      v,
+      mode: doc.mode || "auto",
+      force: doc.force || "",
+      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+      packs: doc.packs || defaultPacks(),
+      slots: MSG_SLOTS,
+      updated_at: doc.updated_at || 0,
+      ambulanceActive: !!doc.ambulanceActive,
+      ambulanceL1: doc.ambulanceL1 || "",
+      ambulanceL2: doc.ambulanceL2 || ""
+    });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -869,16 +828,15 @@ function renderDashboardHTML(TOKEN) {
   const templates = ${JSON.stringify(defaultPacks())};
   const MSG_SLOTS = ${MSG_SLOTS};
   const SIGS = [
-    {k:"red",   name:"RED → STOP"},
+    {k:"red", name:"RED → STOP"},
     {k:"amber", name:"AMBER → WAIT"},
     {k:"green", name:"GREEN → GO"},
-    {k:"no",    name:"NO SIGNAL"}
+    {k:"no", name:"NO SIGNAL"}
   ];
 
   function currentDeviceRow(device_id) {
     return DEVICE_CACHE.find(d => d.device_id === device_id) || null;
   }
-
   function currentDeviceStatus(device_id) {
     const d = currentDeviceRow(device_id);
     return d ? (d.status || "offline") : "offline";
@@ -952,7 +910,7 @@ function renderDashboardHTML(TOKEN) {
   function updateAmbPreview() {
     const d = currentDeviceRow(devSel.value);
     const devName = d ? d.device_id : "DEVICE";
-    ambPreview.value = devName + " STOP | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
+    ambPreview.value = devName + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
   }
 
   forceSel.addEventListener("change", () => {
@@ -988,7 +946,6 @@ function renderDashboardHTML(TOKEN) {
     }
 
     treeBody.innerHTML = "";
-
     const grouped = {};
     DEVICE_CACHE.forEach(d => {
       const j = d.junction_name || "Junction Not Sent";
@@ -1105,10 +1062,7 @@ function renderDashboardHTML(TOKEN) {
     }
 
     const f = forceSel.value || "";
-    let payload = {
-      device_id,
-      force: f
-    };
+    let payload = { device_id, force: f };
 
     if (f === "ambulance") {
       payload.amb_slot = Number(ambSel.value || 0);
@@ -1140,7 +1094,6 @@ function renderDashboardHTML(TOKEN) {
       if (f === "") setStatus("Sent | Auto mode restored", true);
       else if (f === "ambulance") setStatus("Sent | Ambulance active", true);
       else setStatus("Sent", true);
-
     } catch (e) {
       setStatus("Network error", false);
     }
