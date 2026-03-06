@@ -57,8 +57,10 @@ const MSG_SLOTS = 5;
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-const DEVICES = new Map(); // key => final device id shown in dashboard
-const CLOUD = new Map();   // key => same device id
+// DEVICES key = final shown device id (usually arm name / road name)
+const DEVICES = new Map();
+// CLOUD key = same final shown device id
+const CLOUD = new Map();
 
 function safeText(v) {
   return String(v || "").trim();
@@ -139,7 +141,7 @@ function ensureCloudRow(device_id) {
   if (!CLOUD.has(device_id)) {
     CLOUD.set(device_id, {
       device_id,
-      mode: "auto", // auto | force_red | force_amber | force_green | ambulance
+      mode: "auto",
       force: "",
       slot: { red: 0, amber: 0, green: 0, no: 0 },
       packs: defaultPacks(),
@@ -165,6 +167,25 @@ function cleanDeadDevices() {
       DEVICES.delete(device_id);
       CLOUD.delete(device_id);
     }
+  }
+}
+
+// remove duplicate entries for same raw ESP
+function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
+  for (const [key, dev] of DEVICES.entries()) {
+    if (key !== keepKey && safeText(dev.raw_device_id) === safeText(rawDeviceId)) {
+      DEVICES.delete(key);
+      CLOUD.delete(key);
+    }
+  }
+}
+
+// extra safety: remove same final device name from other raw devices if needed
+function removeConflictingFinalKey(finalKey, rawDeviceId) {
+  const existing = DEVICES.get(finalKey);
+  if (existing && safeText(existing.raw_device_id) !== safeText(rawDeviceId)) {
+    CLOUD.delete(finalKey);
+    DEVICES.delete(finalKey);
   }
 }
 
@@ -331,8 +352,11 @@ function upsertLiveDevice(req, res) {
 
     const jn = safeText(body.junction_name || body.junction);
     const arm = safeText(body.arm_name);
-
     const finalDeviceId = arm || rawDeviceId;
+
+    // remove stale duplicate entries for same raw esp
+    removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
+    removeConflictingFinalKey(finalDeviceId, rawDeviceId);
 
     const old = DEVICES.get(finalDeviceId) || {};
     const next = {
@@ -346,21 +370,26 @@ function upsertLiveDevice(req, res) {
       status: "online"
     };
 
-    if (rawDeviceId !== finalDeviceId) {
-      DEVICES.delete(rawDeviceId);
-      if (CLOUD.has(rawDeviceId) && !CLOUD.has(finalDeviceId)) {
-        CLOUD.set(finalDeviceId, CLOUD.get(rawDeviceId));
+    DEVICES.set(finalDeviceId, next);
+
+    // carry cloud state if raw id existed before
+    for (const [key, doc] of CLOUD.entries()) {
+      if (key !== finalDeviceId) {
+        const dev = DEVICES.get(key);
+        if (dev && safeText(dev.raw_device_id) === rawDeviceId) {
+          CLOUD.set(finalDeviceId, doc);
+          CLOUD.delete(key);
+          break;
+        }
       }
-      CLOUD.delete(rawDeviceId);
     }
 
-    DEVICES.set(finalDeviceId, next);
     ensureCloudRow(finalDeviceId);
     cleanDeadDevices();
 
-    res.json({ ok: true, device: next });
+    return res.json({ ok: true, device: next });
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+    return res.status(500).json({ error: String(e.message || e) });
   }
 }
 
@@ -373,8 +402,19 @@ app.post("/heartbeat", upsertLiveDevice);
 app.get("/devices", (req, res) => {
   try {
     cleanDeadDevices();
+
+    // final dedupe by raw_device_id: keep latest
+    const latestByRaw = new Map();
+    for (const dev of DEVICES.values()) {
+      const raw = safeText(dev.raw_device_id || dev.device_id);
+      const prev = latestByRaw.get(raw);
+      if (!prev || Number(dev.last_seen || 0) >= Number(prev.last_seen || 0)) {
+        latestByRaw.set(raw, dev);
+      }
+    }
+
     const out = [];
-    for (const d of DEVICES.values()) {
+    for (const d of latestByRaw.values()) {
       out.push({
         device_id: d.device_id,
         junction_name: normJunction(d.junction_name),
@@ -385,12 +425,14 @@ app.get("/devices", (req, res) => {
         status: isLiveOnline(d) ? "online" : "offline"
       });
     }
+
     out.sort((a, b) => {
       const ja = String(a.junction_name || "");
       const jb = String(b.junction_name || "");
       if (ja !== jb) return ja.localeCompare(jb);
       return String(a.device_id || "").localeCompare(String(b.device_id || ""));
     });
+
     res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -398,12 +440,11 @@ app.get("/devices", (req, res) => {
 });
 
 // ======================
-// APPLY TO ONE DEVICE
+// APPLY MESSAGE TO ONE DEVICE
 // ======================
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const f = String(payload.force || "");
 
-  // AUTO => only update slogans for selected signal group, no force
   if (f === "") {
     const s = String(payload.sig || "red");
     if (!signals.includes(s)) throw new Error("invalid sig");
@@ -431,7 +472,6 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  // AMBULANCE => force full override
   if (f === "ambulance") {
     const idx = clampSlot(Number(payload.amb_slot || 0));
     const slogans = ambulanceSlogans();
@@ -449,7 +489,6 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  // RED / AMBER / GREEN => update selected group and force color
   const s = String(payload.sig || f || "red");
   if (!signals.includes(s)) throw new Error("invalid sig");
 
@@ -477,8 +516,6 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
 
 // ======================
 // SEND MESSAGE
-// target_type = device | junction
-// target_value = device_id or junction_name
 // ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
@@ -512,7 +549,6 @@ app.post("/api/simple", requireAuth, (req, res) => {
       return res.status(400).json({ error: "invalid target_type" });
     }
 
-    // Ambulance from a selected device should broadcast to the whole same junction
     if (String(payload.force || "") === "ambulance" && payload.source_device_id) {
       const sourceDev = DEVICES.get(String(payload.source_device_id));
       if (!isLiveOnline(sourceDev)) {
@@ -529,6 +565,13 @@ app.post("/api/simple", requireAuth, (req, res) => {
         return res.status(400).json({ error: "No online devices found in source junction." });
       }
     }
+
+    // dedupe targets by raw_device_id again, just in case
+    const uniqueByRaw = new Map();
+    for (const dev of targets) {
+      uniqueByRaw.set(safeText(dev.raw_device_id || dev.device_id), dev);
+    }
+    targets = [...uniqueByRaw.values()];
 
     for (const dev of targets) {
       const doc = ensureCloudRow(dev.device_id);
@@ -709,6 +752,9 @@ function renderDashboardHTML(TOKEN) {
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
   .ok{color:#16a34a}
   .bad{color:#dc2626}
+  #editBtn{
+    background:#fff;color:#111827;border:1px solid var(--border);font-weight:900;
+  }
 </style>
 </head>
 
@@ -806,6 +852,7 @@ function renderDashboardHTML(TOKEN) {
 
           <div class="row">
             <button class="sendBtn" id="sendBtn">Send to ESP</button>
+            <button type="button" id="editBtn">Edit Current</button>
           </div>
 
           <div class="statusLine" id="statusTxt">Status: Ready <span class="ok">✓</span></div>
@@ -847,10 +894,11 @@ function renderDashboardHTML(TOKEN) {
   let treeVisible = false;
   let expandedJunction = null;
 
-  // target selection
-  let selectedTargetType = "device";   // device | junction
+  let selectedTargetType = "device";
   let selectedTargetValue = "";
   let selectedSourceDevice = "";
+  let lastLoadedSignal = "red";
+  let lastLoadedSlot = 0;
 
   function logout() {
     window.location.href = "/login";
@@ -984,6 +1032,22 @@ function renderDashboardHTML(TOKEN) {
     line2.value = t.l2 || "";
   }
 
+  function getCurrentTemplateText(sig, slot) {
+    const t = templates[sig]?.[slot] || { l1: "", l2: "" };
+    return { l1: t.l1 || "", l2: t.l2 || "" };
+  }
+
+  function loadEditorForSignal(sig, slot) {
+    lastLoadedSignal = sig;
+    lastLoadedSlot = slot;
+    sigSel.value = sig;
+    fillSlotOptions();
+    slotSel.value = String(slot);
+    const t = getCurrentTemplateText(sig, slot);
+    line1.value = t.l1;
+    line2.value = t.l2;
+  }
+
   function fillAmbulanceOptions() {
     ambSel.innerHTML = "";
     ambulanceSlogans.forEach((s, i) => {
@@ -1045,13 +1109,18 @@ function renderDashboardHTML(TOKEN) {
     });
 
     Object.keys(grouped).sort().forEach(junction => {
+      const row = document.createElement("div");
+      row.style.display = "flex";
+      row.style.gap = "8px";
+      row.style.marginTop = "8px";
+
       const jBtn = document.createElement("button");
       jBtn.className = "jBtn";
+      jBtn.style.flex = "1";
       if (selectedTargetType === "junction" && selectedTargetValue === junction) {
         jBtn.classList.add("selectedTarget");
       }
       jBtn.textContent = junction + (expandedJunction === junction ? " ▲" : " ▼");
-
       jBtn.onclick = () => {
         selectedTargetType = "junction";
         selectedTargetValue = junction;
@@ -1060,7 +1129,23 @@ function renderDashboardHTML(TOKEN) {
         updateCurrentLine();
         buildTree();
       };
-      treeBody.appendChild(jBtn);
+
+      const jEdit = document.createElement("button");
+      jEdit.className = "dBtn";
+      jEdit.style.width = "90px";
+      jEdit.textContent = "Edit";
+      jEdit.onclick = () => {
+        selectedTargetType = "junction";
+        selectedTargetValue = junction;
+        selectedSourceDevice = "";
+        updateCurrentLine();
+        showTab("msg");
+        loadEditorForSignal(sigSel.value || "red", Number(slotSel.value || 0));
+      };
+
+      row.appendChild(jBtn);
+      row.appendChild(jEdit);
+      treeBody.appendChild(row);
 
       if (expandedJunction === junction) {
         const wrap = document.createElement("div");
@@ -1069,8 +1154,14 @@ function renderDashboardHTML(TOKEN) {
         grouped[junction]
           .sort((a,b)=>(a.device_id || "").localeCompare(b.device_id || ""))
           .forEach(dev => {
+            const dRow = document.createElement("div");
+            dRow.style.display = "flex";
+            dRow.style.gap = "8px";
+            dRow.style.marginTop = "8px";
+
             const dBtn = document.createElement("button");
             dBtn.className = "dBtn";
+            dBtn.style.flex = "1";
             if (selectedTargetType === "device" && selectedTargetValue === dev.device_id) {
               dBtn.classList.add("selectedTarget");
             }
@@ -1085,7 +1176,25 @@ function renderDashboardHTML(TOKEN) {
               buildTree();
               showTab("msg");
             };
-            wrap.appendChild(dBtn);
+
+            const dEdit = document.createElement("button");
+            dEdit.className = "dBtn";
+            dEdit.style.width = "90px";
+            dEdit.textContent = "Edit";
+            dEdit.onclick = () => {
+              selectedTargetType = "device";
+              selectedTargetValue = dev.device_id;
+              selectedSourceDevice = dev.device_id;
+              devSel.value = dev.device_id;
+              updateCurrentLine();
+              updateAmbPreview();
+              showTab("msg");
+              loadEditorForSignal(sigSel.value || "red", Number(slotSel.value || 0));
+            };
+
+            dRow.appendChild(dBtn);
+            dRow.appendChild(dEdit);
+            wrap.appendChild(dRow);
           });
 
         treeBody.appendChild(wrap);
@@ -1185,7 +1294,6 @@ function renderDashboardHTML(TOKEN) {
     };
 
     if (f === "ambulance") {
-      // ambulance must know source road
       const sourceDev = selectedSourceDevice || devSel.value;
       if (!sourceDev) {
         setStatus("Select source device for ambulance", false);
@@ -1227,6 +1335,12 @@ function renderDashboardHTML(TOKEN) {
   }
 
   sendBtn.addEventListener("click", sendToESP);
+
+  document.getElementById("editBtn").addEventListener("click", () => {
+    showTab("msg");
+    loadEditorForSignal(sigSel.value || "red", Number(slotSel.value || 0));
+    setStatus("Edit mode loaded", true);
+  });
 
   fillForceOptions();
   fillSigOptions();
