@@ -58,13 +58,11 @@ const TEST_JUNCTION = "Rasoolpura";
 // ======================
 // LIVE MEMORY ONLY
 // ======================
-// Real/live devices
-const DEVICES = new Map(); // key => final visible device id
-const CLOUD = new Map();   // key => same device id
+const DEVICES = new Map();       // real ESP devices
+const CLOUD = new Map();         // real ESP cloud states
 
-// Virtual test devices
-const VIRTUAL_DEVICES = new Map();
-const VIRTUAL_CLOUD = new Map();
+const VIRTUAL_DEVICES = new Map(); // test devices
+const VIRTUAL_CLOUD = new Map();   // test cloud states
 
 function safeText(v) {
   return String(v || "").trim();
@@ -160,7 +158,6 @@ function ensureCloudRow(device_id) {
   if (!CLOUD.has(device_id)) CLOUD.set(device_id, makeCloudDoc(device_id));
   return CLOUD.get(device_id);
 }
-
 function ensureVirtualCloudRow(device_id) {
   if (!VIRTUAL_CLOUD.has(device_id)) VIRTUAL_CLOUD.set(device_id, makeCloudDoc(device_id));
   return VIRTUAL_CLOUD.get(device_id);
@@ -199,7 +196,7 @@ function removeConflictingFinalKey(finalKey, rawDeviceId) {
 }
 
 // ======================
-// VIRTUAL TEST DEVICES
+// TEST DEVICES
 // ======================
 function seedVirtualDevices() {
   const now = Date.now();
@@ -521,35 +518,30 @@ app.get("/devices", (req, res) => {
 });
 
 // ======================
-// DEBUG CLOUD JSON
+// DEBUG CLOUD
 // ======================
 app.get("/api/debug/cloud", (req, res) => {
   try {
     const out = [];
-
     for (const d of allDevicesMerged()) {
-      const cloudDoc = d.virtual
-        ? ensureVirtualCloudRow(d.device_id)
-        : ensureCloudRow(d.device_id);
-
+      const doc = d.virtual ? ensureVirtualCloudRow(d.device_id) : ensureCloudRow(d.device_id);
       out.push({
         device_id: d.device_id,
         junction_name: d.junction_name,
         arm_name: d.arm_name,
-        virtual: !!d.virtual,
         status: d.status,
-        mode: cloudDoc.mode,
-        force: cloudDoc.force,
-        ambulanceActive: cloudDoc.ambulanceActive,
-        ambulanceL1: cloudDoc.ambulanceL1,
-        ambulanceL2: cloudDoc.ambulanceL2,
-        slot: cloudDoc.slot,
-        packs: cloudDoc.packs,
-        v: cloudDoc.v,
-        updated_at: cloudDoc.updated_at
+        virtual: !!d.virtual,
+        mode: doc.mode,
+        force: doc.force,
+        ambulanceActive: doc.ambulanceActive,
+        ambulanceL1: doc.ambulanceL1,
+        ambulanceL2: doc.ambulanceL2,
+        slot: doc.slot,
+        packs: doc.packs,
+        v: doc.v,
+        updated_at: doc.updated_at
       });
     }
-
     res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
@@ -557,11 +549,20 @@ app.get("/api/debug/cloud", (req, res) => {
 });
 
 // ======================
-// APPLY TO ONE DEVICE
+// CLOUD HELPERS
 // ======================
+function getCloudStoreForDevice(dev) {
+  return dev.virtual ? VIRTUAL_CLOUD : CLOUD;
+}
+
+function ensureCloudForDevice(dev) {
+  return dev.virtual ? ensureVirtualCloudRow(dev.device_id) : ensureCloudRow(dev.device_id);
+}
+
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const f = String(payload.force || "");
 
+  // AUTO -> clear force and ambulance, but still update selected signal text if provided
   if (f === "") {
     const s = String(payload.sig || "red");
     if (!signals.includes(s)) throw new Error("invalid sig");
@@ -631,16 +632,6 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   doc.updated_at = now;
 }
 
-function getCloudStoreForDevice(dev) {
-  return dev.virtual ? VIRTUAL_CLOUD : CLOUD;
-}
-
-function ensureCloudForDevice(dev) {
-  return dev.virtual
-    ? ensureVirtualCloudRow(dev.device_id)
-    : ensureCloudRow(dev.device_id);
-}
-
 // ======================
 // SEND MESSAGE
 // ======================
@@ -649,6 +640,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
     const payload = req.body || {};
     const targetType = String(payload.target_type || "device");
     const targetValue = safeText(payload.target_value || payload.device_id);
+    const force = String(payload.force || "");
 
     if (!targetValue) {
       return res.status(400).json({ error: "target_value required" });
@@ -659,13 +651,18 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
     if (targetType === "device") {
       const dev = getMergedDeviceById(targetValue);
-      if (!dev) {
-        return res.status(400).json({ error: "Device not found." });
-      }
+      if (!dev) return res.status(400).json({ error: "Device not found." });
       if (dev.status !== "online") {
         return res.status(400).json({ error: "Device is OFFLINE. Check device WiFi / power / network." });
       }
-      targets = [dev];
+
+      // AMBULANCE sent to one road => all in that junction
+      // AUTO sent to one road => all in that junction return to auto
+      if (force === "ambulance" || force === "") {
+        targets = getDevicesByJunction(dev.junction_name);
+      } else {
+        targets = [dev];
+      }
     } else if (targetType === "junction") {
       targets = getDevicesByJunction(targetValue);
       if (!targets.length) {
@@ -675,12 +672,11 @@ app.post("/api/simple", requireAuth, (req, res) => {
       return res.status(400).json({ error: "invalid target_type" });
     }
 
-    if (String(payload.force || "") === "ambulance" && payload.source_device_id) {
+    if (force === "ambulance" && payload.source_device_id) {
       const sourceDev = getMergedDeviceById(String(payload.source_device_id));
       if (!sourceDev || sourceDev.status !== "online") {
         return res.status(400).json({ error: "Source device is OFFLINE." });
       }
-
       targets = getDevicesByJunction(sourceDev.junction_name);
       if (!targets.length) {
         return res.status(400).json({ error: "No online devices found in source junction." });
@@ -688,9 +684,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
     }
 
     const uniqueByDevice = new Map();
-    for (const dev of targets) {
-      uniqueByDevice.set(dev.device_id, dev);
-    }
+    for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
     targets = [...uniqueByDevice.values()];
 
     for (const dev of targets) {
@@ -717,7 +711,6 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
 // ======================
 // ESP PULL
-// Only real ESPs pull. Virtual devices are for dashboard/json testing.
 // ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
@@ -960,11 +953,11 @@ function renderDashboardHTML(TOKEN) {
           <div class="grid" id="lineGrid">
             <div>
               <div class="lbl">Line 1</div>
-              <input id="line1" placeholder="Line 1"/>
+              <input id="line1" placeholder="Line 1" />
             </div>
             <div>
               <div class="lbl">Line 2</div>
-              <input id="line2" placeholder="Line 2"/>
+              <input id="line2" placeholder="Line 2" />
             </div>
           </div>
 
@@ -1010,7 +1003,6 @@ function renderDashboardHTML(TOKEN) {
   let DEVICE_CACHE = [];
   let treeVisible = false;
   let expandedJunction = null;
-
   let selectedTargetType = "device";
   let selectedTargetValue = "";
   let selectedSourceDevice = "";
@@ -1098,6 +1090,7 @@ function renderDashboardHTML(TOKEN) {
       currentLine.textContent = "Current: -";
       return;
     }
+
     currentLine.innerHTML =
       "Current: <b>" + d.device_id + "</b> | <b>" + d.status.toUpperCase() + "</b> | " + d.junction_name +
       (d.virtual ? " | TEST" : "");
@@ -1182,6 +1175,7 @@ function renderDashboardHTML(TOKEN) {
     fillSlotOptions();
     autofillLines();
   });
+
   slotSel.addEventListener("change", autofillLines);
 
   devSel.addEventListener("change", () => {
@@ -1193,6 +1187,10 @@ function renderDashboardHTML(TOKEN) {
   });
 
   ambSel.addEventListener("change", updateAmbPreview);
+
+  // click lines directly = edit
+  line1.addEventListener("focus", () => setStatus("Editing Line 1", true));
+  line2.addEventListener("focus", () => setStatus("Editing Line 2", true));
 
   function buildTree() {
     if (DEVICE_CACHE.length === 0) {
@@ -1270,8 +1268,8 @@ function renderDashboardHTML(TOKEN) {
       document.getElementById("off").innerText = off;
 
       DEVICE_CACHE.forEach(d => {
-        const pos = [d.lat || 0, d.lng || 0];
         const virtual = d.device_id === "ROAD 2" || d.device_id === "ROAD 3";
+        const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status, virtual);
         const pop =
           "<b>" + d.device_id + "</b>" +
@@ -1382,9 +1380,13 @@ function renderDashboardHTML(TOKEN) {
         return;
       }
 
-      if (f === "") setStatus("Sent | Auto mode restored", true);
-      else if (f === "ambulance") setStatus("Sent | Ambulance active | " + (out.count || 0) + " device(s)", true);
-      else setStatus("Sent | " + (out.count || 0) + " device(s)", true);
+      if (f === "") {
+        setStatus("Sent | Auto mode on all selected junction devices", true);
+      } else if (f === "ambulance") {
+        setStatus("Sent | Ambulance active | " + (out.count || 0) + " device(s)", true);
+      } else {
+        setStatus("Sent | " + (out.count || 0) + " device(s)", true);
+      }
     } catch (e) {
       setStatus("Network error", false);
     }
