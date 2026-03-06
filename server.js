@@ -148,6 +148,9 @@ function ensureCloudRow(device_id) {
       ambulanceActive: false,
       ambulanceL1: "",
       ambulanceL2: ""
+            ambulanceRoad: "",
+      ambulancePersistent: false,
+      ambulanceColor: "blue"
     });
   }
   return CLOUD.get(device_id);
@@ -441,27 +444,48 @@ app.post("/api/simple", requireAuth, (req, res) => {
     if (f === "") {
       doc.force = "";
       doc.ambulanceActive = false;
+      doc.ambulancePersistent = false;
+      doc.ambulanceRoad = "";
+      doc.ambulanceColor = "";
       doc.v = Number(doc.v || 0) + 1;
       doc.updated_at = now;
       CLOUD.set(key, doc);
       return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
     }
 
-    if (f === "ambulance") {
+     if (f === "ambulance") {
+
       const idx = clampSlot(Number(amb_slot || 0));
       const slogans = ambulanceSlogans();
 
       doc.force = "ambulance";
       doc.ambulanceActive = true;
-      doc.ambulanceL1 = safeText(dev.device_id) + " STOP";
+      doc.ambulancePersistent = true;
+
+      doc.ambulanceRoad = safeText(dev.device_id);
+
+  // static line
+      doc.ambulanceL1 = "AMBULANCE ARRIVING " + doc.ambulanceRoad;
+
+  // scrolling line
       doc.ambulanceL2 = slogans[idx] || slogans[0];
+
+  // display color instruction
+      doc.ambulanceColor = "blue";
 
       doc.v = Number(doc.v || 0) + 1;
       doc.updated_at = now;
+
       CLOUD.set(key, doc);
 
-      return res.json({ ok: true, v: doc.v, updated_at: doc.updated_at });
-    }
+      return res.json({
+      ok: true,
+      ambulance: true,
+      road: doc.ambulanceRoad,
+      v: doc.v,
+      updated_at: doc.updated_at
+  });
+}
 
     doc.force = f;
     doc.ambulanceActive = false;
@@ -509,19 +533,22 @@ app.get("/api/pull/:device_id", (req, res) => {
     if (since >= v) return res.json({ ok: true, changed: false, v });
 
     res.json({
-      ok: true,
-      changed: true,
-      device_id: key,
-      v,
-      force: doc.force || "",
-      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
-      packs: doc.packs || defaultPacks(),
-      slots: MSG_SLOTS,
-      updated_at: doc.updated_at || 0,
-      ambulanceActive: !!doc.ambulanceActive,
-      ambulanceL1: doc.ambulanceL1 || "",
-      ambulanceL2: doc.ambulanceL2 || ""
-    });
+  ok: true,
+  changed: true,
+  device_id: key,
+  v,
+  force: doc.force || "",
+  slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+  packs: doc.packs || defaultPacks(),
+  slots: MSG_SLOTS,
+  updated_at: doc.updated_at || 0,
+  ambulanceActive: !!doc.ambulanceActive,
+  ambulanceRoad: doc.ambulanceRoad || "",
+  ambulancePersistent: !!doc.ambulancePersistent,
+  ambulanceColor: doc.ambulanceColor || "blue",
+  ambulanceL1: doc.ambulanceL1 || "",
+  ambulanceL2: doc.ambulanceL2 || ""
+});
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
