@@ -247,6 +247,96 @@ function seedVirtualDevices() {
 
 seedVirtualDevices();
 
+/* ADD HERE */
+
+function seedRealJunctions() {
+// ======================
+// REAL JUNCTIONS (PRELOAD)
+// ======================
+function seedRealJunctions() {
+
+  const now = Date.now();
+
+  const items = [
+
+    {
+      junction: "CP Office",
+      arms: [
+        { id: "R1-Gachibowli", lat: 17.434092, lng: 78.369703 },
+        { id: "R2-NCB", lat: 17.434092, lng: 78.369703 }
+      ]
+    },
+
+    {
+      junction: "Gachibowli",
+      arms: [
+        { id: "R1-IIIT", lat: 17.43865798, lng: 78.36377732 },
+        { id: "R2-Kondapur", lat: 17.43865798, lng: 78.36377732 },
+        { id: "R3-NCB", lat: 17.43865798, lng: 78.36377732 },
+        { id: "R4-ORR", lat: 17.43865798, lng: 78.36377732 }
+      ]
+    },
+
+    {
+      junction: "NCB",
+      arms: [
+        { id: "R1-Khajaguda", lat: 17.4289726, lng: 78.3746611 },
+        { id: "R2-Gachibowli", lat: 17.4289726, lng: 78.3746611 },
+        { id: "R3-Ikea", lat: 17.4289726, lng: 78.3746611 }
+      ]
+    },
+
+    {
+      junction: "Khajaguda",
+      arms: [
+        { id: "R1-Whispervalley", lat: 17.4225664, lng: 78.38209748 },
+        { id: "R2-NCB", lat: 17.4225664, lng: 78.38209748 },
+        { id: "R3-Khajaguda", lat: 17.4225664, lng: 78.38209748 }
+      ]
+    },
+
+    {
+      junction: "Indra Nagar",
+      arms: [
+        { id: "R1-IIIT", lat: 17.44104, lng: 78.360121 },
+        { id: "R2-Gachibowli", lat: 17.44104, lng: 78.360121 }
+      ]
+    }
+
+  ];
+
+  items.forEach(j => {
+
+    j.arms.forEach(a => {
+
+      const device_id = a.id;
+
+      if (!DEVICES.has(device_id)) {
+
+        DEVICES.set(device_id, {
+          device_id: device_id,
+          raw_device_id: device_id,
+          junction_name: j.junction,
+          arm_name: device_id,
+          lat: a.lat,
+          lng: a.lng,
+          last_seen: 0,
+          status: "offline",
+          virtual: false
+        });
+
+        ensureCloudRow(device_id);
+
+      }
+
+    });
+
+  });
+
+}
+
+seedRealJunctions();
+
 function allDevicesMerged() {
   cleanDeadDevices();
 
