@@ -203,7 +203,7 @@ function seedVirtualDevices() {
 
   const items = [
     {
-      device_id: "Road 1",
+      device_id: "NAC SHILPARARAM",
       raw_device_id: "VIRTUAL_ROAD_2",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 2",
@@ -214,7 +214,7 @@ function seedVirtualDevices() {
       virtual: true
     },
     {
-      device_id: "Road 2",
+      device_id: "CII",
       raw_device_id: "VIRTUAL_ROAD_3",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 3",
@@ -227,7 +227,7 @@ function seedVirtualDevices() {
 
     // NEW DEVICE
     {
-      device_id: "Road 3",
+      device_id: "KOTHAGUDA",
       raw_device_id: "VIRTUAL_ROAD_4",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 4",
@@ -403,7 +403,7 @@ function getMergedDeviceById(device_id) {
 }
 
 function getDevicesByJunction(junction_name) {
-  return allDevicesMerged().filter(d => d.junction_name === junction_name && d.status === "online");
+  return allDevicesMerged().filter(d => d.junction_name === junction_name);
 }
 
 // ======================
