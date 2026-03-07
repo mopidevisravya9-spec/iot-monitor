@@ -307,18 +307,18 @@ function seedRealJunctions() {
       const device_id = a.id;
 
       if (!DEVICES.has(device_id)) {
-
-        DEVICES.set(device_id, {
+       DEVICES.set(device_id, {
           device_id: device_id,
           raw_device_id: device_id,
           junction_name: j.junction,
           arm_name: device_id,
           lat: a.lat,
           lng: a.lng,
-          last_seen: Date.now(),
-          status: "online",
-          virtual: false
-        });
+          last_seen: 0,
+          status: "offline",
+          virtual: false,
+          permanent: true
+  });
 
         ensureCloudRow(device_id);
 
