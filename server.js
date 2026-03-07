@@ -207,8 +207,8 @@ function seedVirtualDevices() {
       raw_device_id: "VIRTUAL_ROAD_2",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 2",
-      lat: 17.4472,
-      lng: 78.4774,
+      lat: 17.4630613,
+      lng: 78.3671654,
       last_seen: now,
       status: "online",
       virtual: true
@@ -218,8 +218,8 @@ function seedVirtualDevices() {
       raw_device_id: "VIRTUAL_ROAD_3",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 3",
-      lat: 17.4473,
-      lng: 78.4775,
+      lat: 17.4630613,
+      lng: 78.3671654,
       last_seen: now,
       status: "online",
       virtual: true
@@ -231,8 +231,8 @@ function seedVirtualDevices() {
       raw_device_id: "VIRTUAL_ROAD_4",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 4",
-      lat: 17.4474,
-      lng: 78.4776,
+      lat: 17.4630613,
+      lng: 78.3671654,
       last_seen: now,
       status: "online",
       virtual: true
