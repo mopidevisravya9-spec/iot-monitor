@@ -172,7 +172,6 @@ function cleanDeadDevices() {
   const now = Date.now();
   for (const [device_id, dev] of DEVICES.entries()) {
     if (dev.permanent) continue;
-    
     if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS * 20) {
       DEVICES.delete(device_id);
       CLOUD.delete(device_id);
@@ -564,7 +563,7 @@ function upsertLiveDevice(req, res) {
     removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
     removeConflictingFinalKey(finalDeviceId, rawDeviceId);
 
-    const old = DEVICES.get(finalDeviceId) || {};
+    const old = DEVICES.get(finalDeviceId) || { permanent: true };
     const next = {
       device_id: finalDeviceId,
       raw_device_id: rawDeviceId,
