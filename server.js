@@ -171,6 +171,8 @@ function isLiveOnline(dev) {
 function cleanDeadDevices() {
   const now = Date.now();
   for (const [device_id, dev] of DEVICES.entries()) {
+    if (dev.permanent) continue;
+    
     if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS * 20) {
       DEVICES.delete(device_id);
       CLOUD.delete(device_id);
