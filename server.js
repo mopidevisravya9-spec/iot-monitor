@@ -198,76 +198,66 @@ function removeConflictingFinalKey(finalKey, rawDeviceId) {
 // ======================
 // TEST DEVICES
 // ======================
- // ======================
- // TEST DEVICES
- // ======================
- function seedVirtualDevices() {
-   const now = Date.now();
+function seedVirtualDevices() {
+  const now = Date.now();
 
-   const items = [
-     {
-       device_id: "ROAD 2",
-       raw_device_id: "VIRTUAL_ROAD_2",
-       junction_name: TEST_JUNCTION,
-       arm_name: "ROAD 2",
-       lat: 17.4472,
-       lng: 78.4774,
-       last_seen: now,
-       status: "online",
-       virtual: true
-     },
-     {
-       device_id: "ROAD 3",
-       raw_device_id: "VIRTUAL_ROAD_3",
-       junction_name: TEST_JUNCTION,
-       arm_name: "ROAD 3",
-       lat: 17.4473,
-       lng: 78.4775,
-       last_seen: now,
-       status: "online",
-       virtual: true
-     },
+  const items = [
+    {
+      device_id: "ROAD 2",
+      raw_device_id: "VIRTUAL_ROAD_2",
+      junction_name: TEST_JUNCTION,
+      arm_name: "ROAD 2",
+      lat: 17.4472,
+      lng: 78.4774,
+      last_seen: now,
+      status: "online",
+      virtual: true
+    },
+    {
+      device_id: "ROAD 3",
+      raw_device_id: "VIRTUAL_ROAD_3",
+      junction_name: TEST_JUNCTION,
+      arm_name: "ROAD 3",
+      lat: 17.4473,
+      lng: 78.4775,
+      last_seen: now,
+      status: "online",
+      virtual: true
+    },
 
-     // NEW DEVICE
-     {
-       device_id: "ROAD 4",
-       raw_device_id: "VIRTUAL_ROAD_4",
-       junction_name: TEST_JUNCTION,
-       arm_name: "ROAD 4",
-       lat: 17.4474,
-       lng: 78.4776,
-       last_seen: now,
-       status: "online",
-       virtual: true
-     },
+    // NEW DEVICE
+    {
+      device_id: "ROAD 4",
+      raw_device_id: "VIRTUAL_ROAD_4",
+      junction_name: TEST_JUNCTION,
+      arm_name: "ROAD 4",
+      lat: 17.4474,
+      lng: 78.4776,
+      last_seen: now,
+      status: "online",
+      virtual: true
+    },
 
-     // NEW DEVICE
-     {
-       device_id: "ROAD 5",
-       raw_device_id: "VIRTUAL_ROAD_5",
-       junction_name: TEST_JUNCTION,
-       arm_name: "ROAD 5",
-       lat: 17.4475,
-       lng: 78.4777,
-       last_seen: now,
-       status: "online",
-       virtual: true
-     }
-   ];
-
-   items.forEach(d => {
-     VIRTUAL_DEVICES.set(d.device_id, d);
-     ensureVirtualCloudRow(d.device_id);
-   });
- }
-
- seedVirtualDevices();
+    // NEW DEVICE
+    {
+      device_id: "ROAD 5",
+      raw_device_id: "VIRTUAL_ROAD_5",
+      junction_name: TEST_JUNCTION,
+      arm_name: "ROAD 5",
+      lat: 17.4475,
+      lng: 78.4777,
+      last_seen: now,
+      status: "online",
+      virtual: true
+    }
+  ];
 
   items.forEach(d => {
     VIRTUAL_DEVICES.set(d.device_id, d);
     ensureVirtualCloudRow(d.device_id);
   });
 }
+
 seedVirtualDevices();
 
 function allDevicesMerged() {
@@ -1330,7 +1320,7 @@ function renderDashboardHTML(TOKEN) {
       DEVICE_CACHE.forEach(d => {
         const opt = document.createElement("option");
         opt.value = d.device_id;
-        opt.textContent = d.device_id + " (" + d.status + ")" + ((d.device_id === "ROAD 2" || d.device_id === "ROAD 3" || d.device_id === "ROAD 4" || d.device_id === "ROAD 5") ? " [TEST]" : "");
+        opt.textContent = d.device_id + " (" + d.status + ")" + ((d.device_id === "ROAD 2" || d.device_id === "ROAD 3") ? " [TEST]" : "");
         devSel.appendChild(opt);
       });
 
