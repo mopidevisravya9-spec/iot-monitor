@@ -318,8 +318,8 @@ function seedRealJunctions() {
           arm_name: device_id,
           lat: a.lat,
           lng: a.lng,
-          last_seen: 0,
-          status: "offline",
+          last_seen: Date.now(),
+          status: "online",
           virtual: false
         });
 
