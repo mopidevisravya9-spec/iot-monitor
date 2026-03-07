@@ -294,11 +294,11 @@ function seedRealJunctions() {
   },
 
   {
-    junction: "Indra Nagar",
-    arms: [
-      { id: "R1-IIIT", lat: 17.44104, lng: 78.360121 },
-      { id: "R2-Gachibowli", lat: 17.44104, lng: 78.360121 }
-    ]
+  junction: "Indra Nagar",
+  arms: [
+    { id: "R1-IndraNagar-IIIT", lat: 17.44104, lng: 78.360121 },
+    { id: "R2-IndraNagar-Gachibowli", lat: 17.44104, lng: 78.360121 }
+  ]
   }
 
 ];
