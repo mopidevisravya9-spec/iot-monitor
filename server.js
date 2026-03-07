@@ -181,6 +181,9 @@ function cleanDeadDevices() {
 
 function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
   for (const [key, dev] of DEVICES.entries()) {
+
+    if (dev.permanent) continue;   // never delete junction arms
+
     if (key !== keepKey && safeText(dev.raw_device_id) === safeText(rawDeviceId)) {
       DEVICES.delete(key);
       CLOUD.delete(key);
@@ -189,8 +192,14 @@ function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
 }
 
 function removeConflictingFinalKey(finalKey, rawDeviceId) {
+
   const existing = DEVICES.get(finalKey);
-  if (existing && safeText(existing.raw_device_id) !== safeText(rawDeviceId)) {
+
+  if (!existing) return;
+
+  if (existing.permanent) return;   // protect junction topology
+
+  if (safeText(existing.raw_device_id) !== safeText(rawDeviceId)) {
     CLOUD.delete(finalKey);
     DEVICES.delete(finalKey);
   }
