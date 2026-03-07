@@ -51,7 +51,7 @@ function requireAuth(req, res, next) {
 // ======================
 // CONSTANTS
 // ======================
-const OFFLINE_AFTER_MS = 30000;
+const OFFLINE_AFTER_MS = 120000;
 const MSG_SLOTS = 5;
 const TEST_JUNCTION = "CII";
 
@@ -581,17 +581,17 @@ function upsertLiveDevice(req, res) {
 
     const old = DEVICES.get(finalDeviceId) || { permanent: true };
     const next = {
-      device_id: finalDeviceId,
-      raw_device_id: rawDeviceId,
-      junction_name: normJunction(jn || old.junction_name),
-      arm_name: normArm(arm || old.arm_name || finalDeviceId),
-      lat: body.lat !== undefined ? Number(body.lat || 0) : Number(old.lat || 0),
-      lng: body.lng !== undefined ? Number(body.lng || 0) : Number(old.lng || 0),
-      last_seen: Date.now(),
-      status: "online",
-      virtual: false
-    };
-
+     device_id: finalDeviceId,
+     raw_device_id: rawDeviceId,
+     junction_name: normJunction(jn || old.junction_name),
+     arm_name: normArm(arm || old.arm_name || finalDeviceId),
+     lat: body.lat !== undefined ? Number(body.lat || 0) : Number(old.lat || 0),
+     lng: body.lng !== undefined ? Number(body.lng || 0) : Number(old.lng || 0),
+     last_seen: Date.now(),
+     status: "online",
+     virtual: false,
+     permanent: old.permanent === true
+  };
     DEVICES.set(finalDeviceId, next);
     ensureCloudRow(finalDeviceId);
     cleanDeadDevices();
