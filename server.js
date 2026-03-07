@@ -337,13 +337,22 @@ function allDevicesMerged() {
 
   const latestByRaw = new Map();
 
-  for (const dev of DEVICES.values()) {
-    const raw = safeText(dev.raw_device_id || dev.device_id);
-    const prev = latestByRaw.get(raw);
-    if (!prev || Number(dev.last_seen || 0) >= Number(prev.last_seen || 0)) {
-      latestByRaw.set(raw, dev);
-    }
+for (const dev of DEVICES.values()) {
+
+  // permanent topology devices should NEVER be deduplicated
+  if (dev.permanent) {
+    latestByRaw.set(dev.device_id, dev);
+    continue;
   }
+
+  const raw = safeText(dev.raw_device_id || dev.device_id);
+
+  const existing = latestByRaw.get(raw);
+
+  if (!existing || Number(dev.last_seen) > Number(existing.last_seen)) {
+    latestByRaw.set(raw, dev);
+  }
+}
 
   const out = [...latestByRaw.values()].map(d => ({
     device_id: d.device_id,
