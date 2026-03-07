@@ -248,8 +248,6 @@ function seedVirtualDevices() {
 seedVirtualDevices();
 
 /* ADD HERE */
-
-function seedRealJunctions() {
 // ======================
 // REAL JUNCTIONS (PRELOAD)
 // ======================
