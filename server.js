@@ -1330,7 +1330,7 @@ function renderDashboardHTML(TOKEN) {
       DEVICE_CACHE.forEach(d => {
         const opt = document.createElement("option");
         opt.value = d.device_id;
-        opt.textContent = d.device_id + " (" + d.status + ")" + ((d.device_id === "ROAD 2" || d.device_id === "ROAD 3") ? " [TEST]" : "");
+        opt.textContent = d.device_id + " (" + d.status + ")" + ((d.device_id === "ROAD 2" || d.device_id === "ROAD 3" || d.device_id === "ROAD 4" || d.device_id === "ROAD 5") ? " [TEST]" : "");
         devSel.appendChild(opt);
       });
 
