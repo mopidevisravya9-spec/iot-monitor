@@ -53,7 +53,7 @@ function requireAuth(req, res, next) {
 // ======================
 const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
-const TEST_JUNCTION = "GACHIBOWLI";
+const TEST_JUNCTION = "CII";
 
 // ======================
 // LIVE MEMORY ONLY
@@ -203,7 +203,7 @@ function seedVirtualDevices() {
 
   const items = [
     {
-      device_id: "KONDAPUR",
+      device_id: "Road 1",
       raw_device_id: "VIRTUAL_ROAD_2",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 2",
@@ -214,7 +214,7 @@ function seedVirtualDevices() {
       virtual: true
     },
     {
-      device_id: "NCB",
+      device_id: "Road 2",
       raw_device_id: "VIRTUAL_ROAD_3",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 3",
@@ -227,7 +227,7 @@ function seedVirtualDevices() {
 
     // NEW DEVICE
     {
-      device_id: "ORR",
+      device_id: "Road 3",
       raw_device_id: "VIRTUAL_ROAD_4",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 4",
@@ -283,6 +283,13 @@ function seedRealJunctions() {
         { id: "R3-Ikea", lat: 17.4289726, lng: 78.3746611 }
       ]
     },
+    {
+     junction: "Indra Nagar",
+     arms: [
+       { id: "R1-IIIT", lat: 17.44104, lng: 78.360121 },
+       { id: "R2-Gachibowli", lat: 17.44104, lng: 78.360121 }
+      ]
+    }
 
     {
       junction: "Khajaguda",
