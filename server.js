@@ -1370,7 +1370,7 @@ function renderDashboardHTML(TOKEN) {
       document.getElementById("off").innerText = off;
 
       DEVICE_CACHE.forEach(d => {
-        const virtual = d.device_id === "ROAD 2" || d.device_id === "ROAD 3";
+        const virtual = d.virtual === true;
         const pos = [d.lat || 0, d.lng || 0];
         const icon = pinIcon(d.status, virtual);
         const pop =
@@ -1394,7 +1394,7 @@ function renderDashboardHTML(TOKEN) {
       DEVICE_CACHE.forEach(d => {
         const opt = document.createElement("option");
         opt.value = d.device_id;
-        opt.textContent = d.device_id + " (" + d.status + ")" + ((d.device_id === "ROAD 2" || d.device_id === "ROAD 3") ? " [TEST]" : "");
+        opt.textContent = d.device_id + " (" + d.status + ")" + (d.virtual ? " [TEST]" : "");
         devSel.appendChild(opt);
       });
 
