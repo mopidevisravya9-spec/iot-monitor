@@ -53,7 +53,7 @@ function requireAuth(req, res, next) {
 // ======================
 const OFFLINE_AFTER_MS = 30000;
 const MSG_SLOTS = 5;
-const TEST_JUNCTION = "Rasoolpura";
+const TEST_JUNCTION = "GACHIBOWLI";
 
 // ======================
 // LIVE MEMORY ONLY
