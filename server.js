@@ -203,7 +203,7 @@ function seedVirtualDevices() {
 
   const items = [
     {
-      device_id: "ROAD 2",
+      device_id: "KONDAPUR",
       raw_device_id: "VIRTUAL_ROAD_2",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 2",
@@ -214,7 +214,7 @@ function seedVirtualDevices() {
       virtual: true
     },
     {
-      device_id: "ROAD 3",
+      device_id: "NCB",
       raw_device_id: "VIRTUAL_ROAD_3",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 3",
@@ -227,7 +227,7 @@ function seedVirtualDevices() {
 
     // NEW DEVICE
     {
-      device_id: "ROAD 4",
+      device_id: "ORR",
       raw_device_id: "VIRTUAL_ROAD_4",
       junction_name: TEST_JUNCTION,
       arm_name: "ROAD 4",
@@ -237,19 +237,6 @@ function seedVirtualDevices() {
       status: "online",
       virtual: true
     },
-
-    // NEW DEVICE
-    {
-      device_id: "ROAD 5",
-      raw_device_id: "VIRTUAL_ROAD_5",
-      junction_name: TEST_JUNCTION,
-      arm_name: "ROAD 5",
-      lat: 17.4475,
-      lng: 78.4777,
-      last_seen: now,
-      status: "online",
-      virtual: true
-    }
   ];
 
   items.forEach(d => {
