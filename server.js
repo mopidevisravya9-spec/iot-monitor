@@ -625,29 +625,39 @@ app.get("/devices", (req, res) => {
 // ======================
 // DEBUG CLOUD
 // ======================
-app.get("/api/debug/cloud", (req, res) => {
+app.get("/api/pull/:device_id", (req, res) => {
   try {
-    const out = [];
-    for (const d of allDevicesMerged()) {
-      const doc = d.virtual ? ensureVirtualCloudRow(d.device_id) : ensureCloudRow(d.device_id);
-      out.push({
-        device_id: d.device_id,
-        junction_name: d.junction_name,
-        arm_name: d.arm_name,
-        status: d.status,
-        virtual: !!d.virtual,
-        mode: doc.mode,
-        force: doc.force,
-        ambulanceActive: doc.ambulanceActive,
-        ambulanceL1: doc.ambulanceL1,
-        ambulanceL2: doc.ambulanceL2,
-        slot: doc.slot,
-        packs: doc.packs,
-        v: doc.v,
-        updated_at: doc.updated_at
-      });
+    const key = safeText(req.params.device_id);
+    const since = Number(req.query.since || 0);
+
+    const dev = getMergedDeviceById(key);
+    if (!dev) {
+      return res.json({ ok: true, changed: false, v: 0 });
     }
-    res.json(out);
+
+    const doc = ensureCloudForDevice(dev);
+    const v = Number(doc.v || 0);
+
+    if (since >= v) {
+      return res.json({ ok: true, changed: false, v });
+    }
+
+    res.json({
+      ok: true,
+      changed: true,
+      device_id: key,
+      v,
+      mode: doc.mode || "auto",
+      force: doc.force || "",
+      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+      packs: doc.packs || defaultPacks(),
+      slots: MSG_SLOTS,
+      updated_at: doc.updated_at || 0,
+      ambulanceActive: !!doc.ambulanceActive,
+      ambulanceL1: doc.ambulanceL1 || "",
+      ambulanceL2: doc.ambulanceL2 || ""
+    });
+
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
