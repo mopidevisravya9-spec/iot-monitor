@@ -223,18 +223,6 @@ function seedVirtualDevices() {
       status: "online",
       virtual: true
     },
-    // NEW DEVICE
-    {
-      device_id: "KOTHAGUDA",
-      raw_device_id: "VIRTUAL_ROAD_4",
-      junction_name: TEST_JUNCTION,
-      arm_name: "ROAD 4",
-      lat: 17.4239,
-      lng: 78.3555,
-      last_seen: now,
-      status: "online",
-      virtual: true
-    },
   ];
 
   items.forEach(d => {
