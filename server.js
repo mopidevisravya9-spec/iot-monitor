@@ -15,7 +15,7 @@ const ADMIN_USER = "admin";
 const ADMIN_PASS = "Ibi@123";
 
 const TOKENS = new Map();
-const TOKEN_TTL_MS = 30 * 60 * 1000;
+const TOKEN_TTL_MS = 24 * 60 * 60 * 1000 * 365;
 
 function makeToken() {
   return crypto.randomBytes(24).toString("hex");
@@ -172,9 +172,10 @@ function cleanDeadDevices() {
   const now = Date.now();
   for (const [device_id, dev] of DEVICES.entries()) {
     if (dev.permanent) continue;
-    if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS * 20) {
-      DEVICES.delete(device_id);
-      CLOUD.delete(device_id);
+
+    if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS) {
+      dev.status = "offline";
+      DEVICES.set(device_id, dev);
     }
   }
 }
@@ -562,8 +563,8 @@ function upsertLiveDevice(req, res) {
     const arm = safeText(body.arm_name);
     const finalDeviceId = arm || rawDeviceId;
 
-    removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
-    removeConflictingFinalKey(finalDeviceId, rawDeviceId);
+   /* removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
+     removeConflictingFinalKey(finalDeviceId, rawDeviceId); */
 
     const old = DEVICES.get(finalDeviceId) || { permanent: true };
     const next = {
@@ -689,7 +690,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     doc.ambulanceActive = false;
     doc.ambulanceL1 = "";
     doc.ambulanceL2 = "";
-    doc.v = Number(doc.v || 0) + 1;
+    doc.v = Date.now();
     doc.updated_at = now;
     return;
   }
@@ -743,7 +744,8 @@ app.post("/api/simple", requireAuth, (req, res) => {
       // AMBULANCE sent to one road => all in that junction
       // AUTO sent to one road => all in that junction return to auto
       if (force === "ambulance" || force === "") {
-        targets = getDevicesByJunction(dev.junction_name);
+        targets = getDevicesByJunction(dev.junction_name)
+         .filter(d => d.status === "online");
       } else {
         targets = [dev];
       }
@@ -1277,11 +1279,11 @@ function renderDashboardHTML(TOKEN) {
   line2.addEventListener("focus", () => setStatus("Editing Line 2", true));
 
   function buildTree() {
-    if (DEVICE_CACHE.length === 0) {
-      treeContainer.style.display = "none";
-      treeVisible = false;
-      return;
-    }
+   if (DEVICE_CACHE.length === 0) {
+  document.getElementById("total").innerText = 0;
+  document.getElementById("on").innerText = 0;
+  document.getElementById("off").innerText = 0;
+  }
 
     treeBody.innerHTML = "";
     const grouped = {};
@@ -1487,7 +1489,9 @@ function renderDashboardHTML(TOKEN) {
 
   showTab("map");
   loadDevices(true);
-  setInterval(() => loadDevices(false), 2000);
+  setInterval(() => {
+  loadDevices(true);
+  }, 3000);
 
   const img = document.getElementById("arcLogo");
   img.addEventListener("error", () => {
