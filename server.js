@@ -404,7 +404,6 @@ function ensureCloudForDevice(dev) {
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const f = String(payload.force || "");
 
-  // AUTO MODE
   if (f === "") {
     const s = String(payload.sig || "red");
     if (!signals.includes(s)) throw new Error("invalid sig");
@@ -433,31 +432,24 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  // AMBULANCE MODE
   if (f === "ambulance") {
     const idx = clampSlot(Number(payload.amb_slot || 0));
     const slogans = ambulanceSlogans();
     const sourceRoad = safeText(payload.source_device_id || dev.device_id);
 
-    const customL1 = safeText(payload.line1);
-    const customL2 = safeText(payload.line2);
-
     doc.mode = "ambulance";
     doc.force = "ambulance";
     doc.ambulanceActive = true;
     doc.ambulanceArm = sourceRoad;
-    doc.ambulanceL1 = customL1
-      ? customL1
-      : (isSourceDevice ? sourceRoad + " AMBULANCE COMING" : "AMBULANCE FROM " + sourceRoad);
-    doc.ambulanceL2 = customL2
-      ? customL2
-      : (slogans[idx] || slogans[0]);
+    doc.ambulanceL1 = isSourceDevice
+      ? sourceRoad + " AMBULANCE COMING"
+      : "AMBULANCE FROM " + sourceRoad;
+    doc.ambulanceL2 = slogans[idx] || "";
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
     return;
   }
 
-  // FORCE RED/AMBER/GREEN
   const s = String(payload.sig || f || "red");
   if (!signals.includes(s)) throw new Error("invalid sig");
 
@@ -727,10 +719,8 @@ app.post("/api/simple", requireAuth, (req, res) => {
       const dev = getMergedDeviceById(targetValue);
       if (!dev) return res.status(400).json({ error: "Device not found." });
 
-      if (force === "ambulance") {
+      if (force === "ambulance" || force === "") {
         targets = getDevicesByJunction(dev.junction_name);
-      } else if (force === "") {
-        targets = [dev];
       } else {
         targets = [dev];
       }
@@ -1220,21 +1210,15 @@ function renderDashboardHTML() {
 
   function updateAmbPreview() {
     const source = selectedSourceDevice || devSel.value || "ROAD";
-    ambPreview.value = (line1.value || (source + " AMBULANCE COMING")) + " | " +
-                       (line2.value || ambulanceSlogans[Number(ambSel.value || 0)] || "");
+    ambPreview.value = source + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
   }
 
   forceSel.addEventListener("change", () => {
     const f = forceSel.value || "";
     if (f === "ambulance") {
       normalGrid.style.display = "none";
+      lineGrid.style.display = "none";
       ambulanceGrid.style.display = "grid";
-      lineGrid.style.display = "grid";
-
-      const source = selectedSourceDevice || devSel.value || "ROAD";
-      if (!line1.value.trim()) line1.value = source + " AMBULANCE COMING";
-      if (!line2.value.trim()) line2.value = ambulanceSlogans[Number(ambSel.value || 0)] || "";
-
       updateAmbPreview();
     } else {
       ambulanceGrid.style.display = "none";
@@ -1259,15 +1243,7 @@ function renderDashboardHTML() {
     buildTree();
   });
 
-  ambSel.addEventListener("change", () => {
-    if (forceSel.value === "ambulance" && !line2.value.trim()) {
-      line2.value = ambulanceSlogans[Number(ambSel.value || 0)] || "";
-    }
-    updateAmbPreview();
-  });
-
-  line1.addEventListener("input", updateAmbPreview);
-  line2.addEventListener("input", updateAmbPreview);
+  ambSel.addEventListener("change", updateAmbPreview);
 
   line1.addEventListener("focus", () => setStatus("Editing Line 1", true));
   line2.addEventListener("focus", () => setStatus("Editing Line 2", true));
@@ -1421,11 +1397,8 @@ function renderDashboardHTML() {
         setStatus("Select source device for ambulance", false);
         return;
       }
-
       payload.source_device_id = sourceDev;
       payload.amb_slot = Number(ambSel.value || 0);
-      payload.line1 = line1.value || "";
-      payload.line2 = line2.value || "";
     } else {
       payload.sig = sigSel.value;
       payload.slot = Number(slotSel.value || 0);
@@ -1459,11 +1432,11 @@ function renderDashboardHTML() {
       }
 
       if (f === "ambulance") {
-        setStatus("Sent | Ambulance | " + (out.count || 0) + " device(s)", true);
+        setStatus("Sent | Ambulance active | " + (out.online_count || 0) + " online, " + (out.offline_count || 0) + " queued", true);
       } else if (f === "") {
-        setStatus("Sent | Auto", true);
+        setStatus("Sent | Auto | " + (out.online_count || 0) + " online, " + (out.offline_count || 0) + " queued", true);
       } else {
-        setStatus("Sent | Force " + f.toUpperCase() + " | " + (out.count || 0) + " device(s)", true);
+        setStatus("Sent | " + (out.online_count || 0) + " online, " + (out.offline_count || 0) + " queued", true);
       }
     } catch (e) {
       setStatus("Network error", false);
