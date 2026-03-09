@@ -696,24 +696,19 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
 
  if (f === "ambulance") {
 
+  const idx = clampSlot(Number(payload.amb_slot || 0));
+  const slogans = ambulanceSlogans();
   const sourceRoad = safeText(payload.source_device_id || dev.device_id);
-
-  const l1 = payload.line1
-    ? String(payload.line1)
-    : (isSourceDevice
-        ? sourceRoad + " AMBULANCE COMING"
-        : "AMBULANCE FROM " + sourceRoad);
-
-  const l2 = payload.line2
-    ? String(payload.line2)
-    : ambulanceSlogans()[clampSlot(Number(payload.amb_slot || 0))];
 
   doc.mode = "ambulance";
   doc.force = "ambulance";
   doc.ambulanceActive = true;
 
-  doc.ambulanceL1 = l1;
-  doc.ambulanceL2 = l2;
+  doc.ambulanceL1 = isSourceDevice
+    ? sourceRoad + " AMBULANCE COMING"
+    : "AMBULANCE FROM " + sourceRoad;
+
+  doc.ambulanceL2 = slogans[idx] || "";
 
   doc.v = Number(doc.v || 0) + 1;
   doc.updated_at = now;
@@ -1246,23 +1241,19 @@ function renderDashboardHTML(TOKEN) {
     ambPreview.value = source + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
   }
 
- forceSel.addEventListener("change", () => {
-  const f = forceSel.value || "";
-
-  if (f === "ambulance") {
-    normalGrid.style.display = "none";
-    ambulanceGrid.style.display = "grid";
-
-    // KEEP message editing visible
-    lineGrid.style.display = "grid";
-
-    updateAmbPreview();
-  } else {
-    ambulanceGrid.style.display = "none";
-    normalGrid.style.display = "grid";
-    lineGrid.style.display = "grid";
-  }
-});
+  forceSel.addEventListener("change", () => {
+    const f = forceSel.value || "";
+    if (f === "ambulance") {
+      normalGrid.style.display = "none";
+      lineGrid.style.display = "none";
+      ambulanceGrid.style.display = "grid";
+      updateAmbPreview();
+    } else {
+      ambulanceGrid.style.display = "none";
+      normalGrid.style.display = "grid";
+      lineGrid.style.display = "grid";
+    }
+  });
 
   sigSel.addEventListener("change", () => {
     fillSlotOptions();
@@ -1441,18 +1432,20 @@ function renderDashboardHTML(TOKEN) {
     };
 
     if (f === "ambulance") {
-  const sourceDev = selectedSourceDevice || devSel.value;
-  if (!sourceDev) {
-    setStatus("Select source device for ambulance", false);
-    return;
-  }
+      const sourceDev = selectedSourceDevice || devSel.value;
+      if (!sourceDev) {
+        setStatus("Select source device for ambulance", false);
+        return;
+      }
+      payload.source_device_id = sourceDev;
+      payload.amb_slot = Number(ambSel.value || 0);
+    } else {
+      payload.sig = sigSel.value;
+      payload.slot = Number(slotSel.value || 0);
+      payload.line1 = line1.value || "";
+      payload.line2 = line2.value || "";
+    }
 
-  payload.source_device_id = sourceDev;
-  payload.amb_slot = Number(ambSel.value || 0);
-
-  payload.line1 = line1.value || "";
-  payload.line2 = line2.value || "";
-}
     setStatus("Sending...", true);
 
     try {
