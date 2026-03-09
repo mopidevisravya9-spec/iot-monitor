@@ -1246,19 +1246,23 @@ function renderDashboardHTML(TOKEN) {
     ambPreview.value = source + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
   }
 
-  forceSel.addEventListener("change", () => {
-    const f = forceSel.value || "";
-    if (f === "ambulance") {
-      normalGrid.style.display = "none";
-      lineGrid.style.display = "none";
-      ambulanceGrid.style.display = "grid";
-      updateAmbPreview();
-    } else {
-      ambulanceGrid.style.display = "none";
-      normalGrid.style.display = "grid";
-      lineGrid.style.display = "grid";
-    }
-  });
+ forceSel.addEventListener("change", () => {
+  const f = forceSel.value || "";
+
+  if (f === "ambulance") {
+    normalGrid.style.display = "none";
+    ambulanceGrid.style.display = "grid";
+
+    // KEEP message editing visible
+    lineGrid.style.display = "grid";
+
+    updateAmbPreview();
+  } else {
+    ambulanceGrid.style.display = "none";
+    normalGrid.style.display = "grid";
+    lineGrid.style.display = "grid";
+  }
+});
 
   sigSel.addEventListener("change", () => {
     fillSlotOptions();
