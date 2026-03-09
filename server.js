@@ -727,6 +727,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
 
   return;
 }
+}
 // ======================
 // SEND MESSAGE
 // ======================
