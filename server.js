@@ -699,7 +699,9 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     doc.mode = "auto";
     doc.force = "";
     doc.ambulanceActive = false;
-    doc.ambulanceL1 = "";
+    doc.ambulanceL1 = isSourceDevice
+  ? sourceRoad + " AMBULANCE COMING"
+  : "AMBULANCE FROM " + sourceRoad;
     doc.ambulanceL2 = "";
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
