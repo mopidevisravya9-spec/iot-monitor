@@ -715,7 +715,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
 
   return;
 }
-}
+}  // ← THIS BRACE WAS MISSING
 // ======================
 // SEND MESSAGE
 // ======================
