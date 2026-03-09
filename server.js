@@ -706,7 +706,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  if (f === "ambulance") {
+ if (f === "ambulance") {
 
   const idx = clampSlot(Number(payload.amb_slot || 0));
   const slogans = ambulanceSlogans();
@@ -717,34 +717,16 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   doc.ambulanceActive = true;
 
   doc.ambulanceL1 = isSourceDevice
-    ? sourceRoad + " "
+    ? sourceRoad + " AMBULANCE COMING"
     : "AMBULANCE FROM " + sourceRoad;
 
-  const s = String(payload.sig || f || "red");
-  if (!signals.includes(s)) throw new Error("invalid sig");
+  doc.ambulanceL2 = slogans[idx] || "";
 
-  const sl = clampSlot(Number(payload.slot || 0));
-  const l1 = String(payload.line1 || "");
-  const l2 = String(payload.line2 || "");
-
-  const packs = doc.packs || defaultPacks();
-  packs[s] = normalizePack(packs[s]);
-  packs[s][sl] = { l1, l2 };
-  doc.packs = packs;
-
-  const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
-  slotObj[s] = sl;
-  doc.slot = slotObj;
-
-  doc.mode = "force_" + f;
-  doc.force = f;
-  doc.ambulanceActive = false;
-  doc.ambulanceL1 = "";
-  doc.ambulanceL2 = "";
   doc.v = Number(doc.v || 0) + 1;
   doc.updated_at = now;
-}
 
+  return;
+}
 // ======================
 // SEND MESSAGE
 // ======================
