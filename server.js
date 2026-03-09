@@ -643,20 +643,21 @@ app.get("/api/pull/:device_id", (req, res) => {
     }
 
     res.json({
-      ok: true,
-      changed: true,
-      device_id: key,
-      v,
-      mode: doc.mode || "auto",
-      force: doc.force || "",
-      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
-      packs: doc.packs || defaultPacks(),
-      slots: MSG_SLOTS,
-      updated_at: doc.updated_at || 0,
-      ambulanceActive: !!doc.ambulanceActive,
-      ambulanceL1: doc.ambulanceL1 || "",
-      ambulanceL2: doc.ambulanceL2 || ""
-    });
+     ok: true,
+     changed: true,
+     device_id: key,
+     v,
+     mode: doc.mode || "auto",
+     force: doc.force || "",
+     slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+     packs: doc.packs || defaultPacks(),
+     slots: MSG_SLOTS,
+     updated_at: doc.updated_at || 0,
+     ambulanceActive: !!doc.ambulanceActive,
+     ambulanceArm: (doc.ambulanceL1 || "").split(" ")[0],
+     ambulanceL1: doc.ambulanceL1 || "",
+     ambulanceL2: doc.ambulanceL2 || ""
+});
 
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
