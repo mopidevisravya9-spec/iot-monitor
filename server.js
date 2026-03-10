@@ -479,7 +479,13 @@ function writeCloudForDevice(dev, doc) {
 }
 
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
-  const f = String(payload.force || "");
+  const force = String(payload.force || "");
+  let targets = [];
+
+   // GLOBAL AUTO RESET → send AUTO to every device
+  if (force === "") {
+  targets = allDevicesMerged();
+}
 
   if (f === "") {
     const s = String(payload.sig || "red");
