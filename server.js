@@ -808,26 +808,29 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
     const now = Date.now();
     let targets = [];
-
     if (targetType === "device") {
-      const dev = getMergedDeviceById(targetValue);
-      if (!dev) return res.status(400).json({ error: "Device not found." });
 
-      if (force === "ambulance" || force === "") {
-        targets = getDevicesByJunction(dev.junction_name);
-      } else {
-        targets = [dev];
-      }
-    } else if (targetType === "junction") {
-      targets = getDevicesByJunction(targetValue);
-      if (!targets.length) {
-        return res.status(400).json({ error: "No devices found in selected junction." });
-      }
-    } else {
-      return res.status(400).json({ error: "invalid target_type" });
-    }
+  const dev = getMergedDeviceById(targetValue);
+    if (!dev) return res.status(400).json({ error: "Device not found." });
 
-    if (force === "ambulance" && payload.source_device_id) {
+  // Always send only to that device
+  targets = [dev];
+
+  } else if (targetType === "junction") {
+
+  targets = getDevicesByJunction(targetValue);
+
+    if (!targets.length) {
+    return res.status(400).json({ error: "No devices found in selected junction." });
+  }
+
+  } else {
+
+  return res.status(400).json({ error: "invalid target_type" });
+
+  }
+
+   if (force === "ambulance" && payload.source_device_id) {
       const sourceDev = getMergedDeviceById(String(payload.source_device_id));
       if (!sourceDev) {
         return res.status(400).json({ error: "Source device not found." });
