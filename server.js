@@ -6,7 +6,7 @@ const path = require("path");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
@@ -20,6 +20,7 @@ const OFFLINE_AFTER_MS = 120000;
 const MSG_SLOTS = 5;
 const TEST_JUNCTION = "CII";
 const STATE_FILE = path.join(__dirname, "state.json");
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "";
 
 // ======================
 // HELPERS
@@ -53,6 +54,9 @@ function normalizePack(arr) {
     out.push({ l1: String(it.l1 || ""), l2: String(it.l2 || "") });
   }
   return out;
+}
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
 }
 
 function defaultPacks() {
@@ -104,10 +108,11 @@ const signals = ["red", "amber", "green", "no"];
 // ======================
 // STATE
 // ======================
-const DEVICES = new Map();
-const CLOUD = new Map();
-const VIRTUAL_DEVICES = new Map();
-const VIRTUAL_CLOUD = new Map();
+const DEVICES = new Map();          // canonical device_id => device row
+const CLOUD = new Map();            // canonical device_id => cloud row
+const VIRTUAL_DEVICES = new Map();  // virtual device_id => device row
+const VIRTUAL_CLOUD = new Map();    // virtual device_id => cloud row
+const DEVICE_ALIASES = new Map();   // alias(raw/final) => canonical
 
 function makeCloudDoc(device_id) {
   return {
@@ -134,11 +139,30 @@ function ensureVirtualCloudRow(device_id) {
   return VIRTUAL_CLOUD.get(device_id);
 }
 
+function rebuildAliases() {
+  DEVICE_ALIASES.clear();
+  for (const [k, d] of DEVICES.entries()) {
+    DEVICE_ALIASES.set(k, k);
+    if (safeText(d.raw_device_id)) DEVICE_ALIASES.set(safeText(d.raw_device_id), k);
+    if (safeText(d.arm_name)) DEVICE_ALIASES.set(safeText(d.arm_name), k);
+  }
+  for (const [k] of VIRTUAL_DEVICES.entries()) {
+    DEVICE_ALIASES.set(k, k);
+  }
+}
+
+function resolveCanonicalKey(anyKey) {
+  const key = safeText(anyKey);
+  return DEVICE_ALIASES.get(key) || key;
+}
+
 function saveState() {
   try {
+    const canonicalDevices = [...DEVICES.entries()];
+    const canonicalCloud = [...CLOUD.entries()].filter(([k]) => !safeText(k).startsWith("__alias__"));
     const state = {
-      devices: [...DEVICES.entries()],
-      cloud: [...CLOUD.entries()]
+      devices: canonicalDevices,
+      cloud: canonicalCloud
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
   } catch (e) {
@@ -151,7 +175,6 @@ function loadState() {
     if (!fs.existsSync(STATE_FILE)) return;
     const raw = fs.readFileSync(STATE_FILE, "utf8");
     const state = JSON.parse(raw || "{}");
-
     for (const [k, v] of (state.devices || [])) DEVICES.set(k, v);
     for (const [k, v] of (state.cloud || [])) CLOUD.set(k, v);
   } catch (e) {
@@ -161,23 +184,29 @@ function loadState() {
 
 function cleanDeadDevices() {
   const now = Date.now();
+  let changed = false;
   for (const [device_id, dev] of DEVICES.entries()) {
     if (dev.permanent) continue;
     if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS * 20) {
       DEVICES.delete(device_id);
       CLOUD.delete(device_id);
+      changed = true;
     }
   }
+  if (changed) rebuildAliases();
 }
 
 function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
+  let changed = false;
   for (const [key, dev] of DEVICES.entries()) {
     if (dev.permanent) continue;
     if (key !== keepKey && safeText(dev.raw_device_id) === safeText(rawDeviceId)) {
       DEVICES.delete(key);
       CLOUD.delete(key);
+      changed = true;
     }
   }
+  if (changed) rebuildAliases();
 }
 
 function removeConflictingFinalKey(finalKey, rawDeviceId) {
@@ -187,6 +216,7 @@ function removeConflictingFinalKey(finalKey, rawDeviceId) {
   if (safeText(existing.raw_device_id) !== safeText(rawDeviceId)) {
     CLOUD.delete(finalKey);
     DEVICES.delete(finalKey);
+    rebuildAliases();
   }
 }
 
@@ -196,7 +226,7 @@ function removeConflictingFinalKey(finalKey, rawDeviceId) {
 function createAuthToken(username) {
   const payload = {
     u: username,
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7
+    exp: Date.now() + 1000 * 60 * 60 * 24 * 30
   };
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = crypto.createHmac("sha256", AUTH_SECRET).update(payloadB64).digest("base64url");
@@ -319,6 +349,7 @@ function seedRealJunctions() {
 
 loadState();
 seedRealJunctions();
+rebuildAliases();
 
 // ======================
 // DEVICE LOOKUPS
@@ -377,12 +408,13 @@ function allDevicesMerged() {
 }
 
 function getMergedDeviceById(device_id) {
-  if (DEVICES.has(device_id)) {
-    const d = DEVICES.get(device_id);
+  const key = resolveCanonicalKey(device_id);
+  if (DEVICES.has(key)) {
+    const d = DEVICES.get(key);
     return { ...d, status: isLiveOnline(d) ? "online" : "offline", virtual: false };
   }
-  if (VIRTUAL_DEVICES.has(device_id)) {
-    return { ...VIRTUAL_DEVICES.get(device_id), status: "online", virtual: true };
+  if (VIRTUAL_DEVICES.has(key)) {
+    return { ...VIRTUAL_DEVICES.get(key), status: "online", virtual: true };
   }
   return null;
 }
@@ -400,6 +432,19 @@ function getCloudStoreForDevice(dev) {
 function ensureCloudForDevice(dev) {
   return dev.virtual ? ensureVirtualCloudRow(dev.device_id) : ensureCloudRow(dev.device_id);
 }
+function writeCloudForDevice(dev, doc) {
+  if (dev.virtual) {
+    VIRTUAL_CLOUD.set(dev.device_id, doc);
+    return;
+  }
+  CLOUD.set(dev.device_id, doc);
+  if (safeText(dev.raw_device_id) && safeText(dev.raw_device_id) !== safeText(dev.device_id)) {
+    DEVICE_ALIASES.set(safeText(dev.raw_device_id), dev.device_id);
+  }
+  if (safeText(dev.arm_name) && safeText(dev.arm_name) !== safeText(dev.device_id)) {
+    DEVICE_ALIASES.set(safeText(dev.arm_name), dev.device_id);
+  }
+}
 
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const f = String(payload.force || "");
@@ -412,15 +457,15 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     const l1 = String(payload.line1 || "");
     const l2 = String(payload.line2 || "");
 
-    const packs = doc.packs || defaultPacks();
+    const packs = deepClone(doc.packs || defaultPacks());
     packs[s] = normalizePack(packs[s]);
     packs[s][sl] = { l1, l2 };
-    doc.packs = packs;
 
-    const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
+    const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
     slotObj[s] = sl;
-    doc.slot = slotObj;
 
+    doc.packs = packs;
+    doc.slot = slotObj;
     doc.mode = "auto";
     doc.force = "";
     doc.ambulanceActive = false;
@@ -436,6 +481,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     const idx = clampSlot(Number(payload.amb_slot || 0));
     const slogans = ambulanceSlogans();
     const sourceRoad = safeText(payload.source_device_id || dev.device_id);
+    const ambText = safeText(payload.amb_text) || slogans[idx] || "";
 
     doc.mode = "ambulance";
     doc.force = "ambulance";
@@ -444,7 +490,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     doc.ambulanceL1 = isSourceDevice
       ? sourceRoad + " AMBULANCE COMING"
       : "AMBULANCE FROM " + sourceRoad;
-    doc.ambulanceL2 = slogans[idx] || "";
+    doc.ambulanceL2 = ambText;
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
     return;
@@ -457,15 +503,15 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const l1 = String(payload.line1 || "");
   const l2 = String(payload.line2 || "");
 
-  const packs = doc.packs || defaultPacks();
+  const packs = deepClone(doc.packs || defaultPacks());
   packs[s] = normalizePack(packs[s]);
   packs[s][sl] = { l1, l2 };
-  doc.packs = packs;
 
-  const slotObj = doc.slot || { red: 0, amber: 0, green: 0, no: 0 };
+  const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
   slotObj[s] = sl;
-  doc.slot = slotObj;
 
+  doc.packs = packs;
+  doc.slot = slotObj;
   doc.mode = "force_" + f;
   doc.force = f;
   doc.ambulanceActive = false;
@@ -474,6 +520,19 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   doc.ambulanceL2 = "";
   doc.v = Number(doc.v || 0) + 1;
   doc.updated_at = now;
+}
+
+// ======================
+// KEEP ALIVE
+// ======================
+app.get("/api/ping", (req, res) => {
+  res.json({ ok: true, time: Date.now() });
+});
+
+if (SELF_URL) {
+  setInterval(() => {
+    fetch(SELF_URL.replace(/\/$/, "") + "/api/ping").catch(() => {});
+  }, 240000);
 }
 
 // ======================
@@ -588,7 +647,7 @@ app.get("/login", (req, res) => {
   const saved = localStorage.getItem("arcadis_token");
   if (saved) {
     fetch("/api/session-check", { headers: { "X-Auth-Token": saved } })
-      .then(r => r.ok ? location.href="/dashboard" : localStorage.removeItem("arcadis_token"))
+      .then(r => { if (r.ok) location.href="/dashboard"; else localStorage.removeItem("arcadis_token"); })
       .catch(()=>{});
   }
 
@@ -666,6 +725,7 @@ function upsertLiveDevice(req, res) {
 
     DEVICES.set(finalDeviceId, next);
     ensureCloudRow(finalDeviceId);
+    rebuildAliases();
     cleanDeadDevices();
     saveState();
 
@@ -763,7 +823,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
         now,
         String(dev.device_id) === String(payload.source_device_id || "")
       );
-      getCloudStoreForDevice(dev).set(dev.device_id, doc);
+      writeCloudForDevice(dev, doc);
     }
 
     saveState();
@@ -785,12 +845,11 @@ app.post("/api/simple", requireAuth, (req, res) => {
 // ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
-    const key = safeText(req.params.device_id);
+    const requestedKey = safeText(req.params.device_id);
+    const key = resolveCanonicalKey(requestedKey);
     const since = Number(req.query.since || 0);
 
-    const doc = CLOUD.has(key) ? ensureCloudRow(key) : makeCloudDoc(key);
-    if (!CLOUD.has(key)) CLOUD.set(key, doc);
-
+    const doc = ensureCloudRow(key);
     const v = Number(doc.v || 0);
 
     if (since >= v) {
@@ -957,7 +1016,7 @@ function renderDashboardHTML() {
     <div id="treeContainer" class="treeBox" style="display:none">
       <div class="treeTitle">Junctions (Live)</div>
       <div id="treeBody"></div>
-      <div class="smallNote">Click device = one ESP only. Click junction = all devices in that junction.</div>
+      <div class="smallNote">Click device = one ESP only. Click junction = all devices in that junction. Ambulance on one device will update the full junction.</div>
     </div>
 
     <div class="footer">Powered by <b>Arcadis</b></div>
@@ -1015,8 +1074,8 @@ function renderDashboardHTML() {
               <select id="ambSel"></select>
             </div>
             <div>
-              <div class="lbl">Preview</div>
-              <input id="ambPreview" readonly />
+              <div class="lbl">Edit ambulance preview / slogan</div>
+              <input id="ambPreview" />
             </div>
           </div>
 
@@ -1045,10 +1104,6 @@ function renderDashboardHTML() {
 <script>
   const AUTH_TOKEN = localStorage.getItem("arcadis_token");
   if (!AUTH_TOKEN) location.href = "/login";
-
-  fetch("/api/session-check", { headers: { "X-Auth-Token": AUTH_TOKEN } })
-    .then(r => { if (!r.ok) { localStorage.removeItem("arcadis_token"); location.href="/login"; } })
-    .catch(()=>{});
 
   const ambulanceSlogans = ${JSON.stringify(ambulanceSlogans())};
 
@@ -1084,6 +1139,19 @@ function renderDashboardHTML() {
     localStorage.removeItem("arcadis_token");
     location.href = "/login";
   }
+
+  async function secureFetch(url, options = {}) {
+    const headers = Object.assign({}, options.headers || {}, { "X-Auth-Token": AUTH_TOKEN });
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+      localStorage.removeItem("arcadis_token");
+      location.href = "/login";
+      throw new Error("Unauthorized");
+    }
+    return res;
+  }
+
+  secureFetch("/api/session-check").catch(()=>{});
 
   function setStatus(text, ok) {
     statusTxt.innerHTML = "Status: " + text + (ok ? " <span class='ok'>✓</span>" : " <span class='bad'>✗</span>");
@@ -1209,8 +1277,7 @@ function renderDashboardHTML() {
   }
 
   function updateAmbPreview() {
-    const source = selectedSourceDevice || devSel.value || "ROAD";
-    ambPreview.value = source + " AMBULANCE COMING | " + (ambulanceSlogans[Number(ambSel.value || 0)] || "");
+    ambPreview.value = ambulanceSlogans[Number(ambSel.value || 0)] || "";
   }
 
   forceSel.addEventListener("change", () => {
@@ -1233,20 +1300,19 @@ function renderDashboardHTML() {
   });
 
   slotSel.addEventListener("change", autofillLines);
+  ambSel.addEventListener("change", updateAmbPreview);
 
   devSel.addEventListener("change", () => {
     selectedTargetType = "device";
     selectedTargetValue = devSel.value;
     selectedSourceDevice = devSel.value;
     updateCurrentLine();
-    updateAmbPreview();
     buildTree();
   });
 
-  ambSel.addEventListener("change", updateAmbPreview);
-
   line1.addEventListener("focus", () => setStatus("Editing Line 1", true));
   line2.addEventListener("focus", () => setStatus("Editing Line 2", true));
+  ambPreview.addEventListener("focus", () => setStatus("Editing Ambulance Preview", true));
 
   function buildTree() {
     treeBody.innerHTML = "";
@@ -1295,7 +1361,6 @@ function renderDashboardHTML() {
               selectedSourceDevice = dev.device_id;
               devSel.value = dev.device_id;
               updateCurrentLine();
-              updateAmbPreview();
               buildTree();
               showTab("msg");
             };
@@ -1399,6 +1464,7 @@ function renderDashboardHTML() {
       }
       payload.source_device_id = sourceDev;
       payload.amb_slot = Number(ambSel.value || 0);
+      payload.amb_text = ambPreview.value || "";
     } else {
       payload.sig = sigSel.value;
       payload.slot = Number(slotSel.value || 0);
@@ -1409,22 +1475,13 @@ function renderDashboardHTML() {
     setStatus("Sending...", true);
 
     try {
-      const r = await fetch("/api/simple", {
+      const r = await secureFetch("/api/simple", {
         method:"POST",
-        headers:{
-          "Content-Type":"application/json",
-          "X-Auth-Token": AUTH_TOKEN
-        },
+        headers:{ "Content-Type":"application/json" },
         body: JSON.stringify(payload)
       });
 
       const out = await r.json().catch(() => ({}));
-
-      if (r.status === 401) {
-        localStorage.removeItem("arcadis_token");
-        location.href = "/login";
-        return;
-      }
 
       if (!r.ok) {
         setStatus(out.error || "Send failed", false);
@@ -1454,11 +1511,8 @@ function renderDashboardHTML() {
 
   showTab("map");
   loadDevices(true);
-  setInterval(() => loadDevices(false), 3000);
-
-  setInterval(() => {
-    fetch("/api/session-check", { headers: { "X-Auth-Token": AUTH_TOKEN } }).catch(()=>{});
-  }, 60000);
+  setInterval(() => loadDevices(false), 2000);
+  setInterval(() => { secureFetch("/api/session-check").catch(()=>{}); }, 30000);
 
   const img = document.getElementById("arcLogo");
   img.addEventListener("error", () => {
