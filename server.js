@@ -809,34 +809,23 @@ app.post("/api/simple", requireAuth, (req, res) => {
     const now = Date.now();
     let targets = [];
 
-   if (targetType === "device") {
+    if (targetType === "device") {
   const dev = getMergedDeviceById(targetValue);
   if (!dev) return res.status(400).json({ error: "Device not found." });
 
   // single ESP update
   targets = [dev];
+
+} else if (targetType === "junction") {
+
+  targets = getDevicesByJunction(targetValue);
+  if (!targets.length) {
+    return res.status(400).json({ error: "No devices found in selected junction." });
+  }
+
+} else {
+  return res.status(400).json({ error: "invalid target_type" });
 }
-    } else if (targetType === "junction") {
-      targets = getDevicesByJunction(targetValue);
-      if (!targets.length) {
-        return res.status(400).json({ error: "No devices found in selected junction." });
-      }
-    } else {
-      return res.status(400).json({ error: "invalid target_type" });
-    }
-
-    if (force === "ambulance" && payload.source_device_id) {
-      const sourceDev = getMergedDeviceById(String(payload.source_device_id));
-      if (!sourceDev) {
-        return res.status(400).json({ error: "Source device not found." });
-      }
-
-      targets = getDevicesByJunction(sourceDev.junction_name);
-      if (!targets.length) {
-        return res.status(400).json({ error: "No devices found in source junction." });
-      }
-    }
-
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
     targets = [...uniqueByDevice.values()];
