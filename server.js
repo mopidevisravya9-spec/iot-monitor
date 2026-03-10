@@ -795,7 +795,7 @@ app.get("/devices", (req, res) => {
   }
 });
 
-aapp.post("/api/simple", requireAuth, (req, res) => {
+  app.post("/api/simple", requireAuth, (req, res) => {
   try {
 
     const payload = req.body || {};
