@@ -509,7 +509,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  if (f === "ambulance") {
+  if (force === "ambulance") {
     const idx = clampSlot(Number(payload.amb_slot || 0));
     const slogans = ambulanceSlogans();
     const sourceRoad = safeText(payload.source_device_id || dev.device_id);
