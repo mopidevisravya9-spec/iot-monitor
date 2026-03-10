@@ -810,22 +810,35 @@ app.post("/api/simple", requireAuth, (req, res) => {
     let targets = [];
 
     if (targetType === "device") {
-  const dev = getMergedDeviceById(targetValue);
-  if (!dev) return res.status(400).json({ error: "Device not found." });
+      const dev = getMergedDeviceById(targetValue);
+      if (!dev) return res.status(400).json({ error: "Device not found." });
 
-  // single ESP update
-  targets = [dev];
+      if (force === "ambulance" || force === "") {
+        targets = getDevicesByJunction(dev.junction_name);
+      } else {
+        targets = [dev];
+      }
+    } else if (targetType === "junction") {
+      targets = getDevicesByJunction(targetValue);
+      if (!targets.length) {
+        return res.status(400).json({ error: "No devices found in selected junction." });
+      }
+    } else {
+      return res.status(400).json({ error: "invalid target_type" });
+    }
 
-} else if (targetType === "junction") {
+    if (force === "ambulance" && payload.source_device_id) {
+      const sourceDev = getMergedDeviceById(String(payload.source_device_id));
+      if (!sourceDev) {
+        return res.status(400).json({ error: "Source device not found." });
+      }
 
-  targets = getDevicesByJunction(targetValue);
-  if (!targets.length) {
-    return res.status(400).json({ error: "No devices found in selected junction." });
-  }
+      targets = getDevicesByJunction(sourceDev.junction_name);
+      if (!targets.length) {
+        return res.status(400).json({ error: "No devices found in source junction." });
+      }
+    }
 
-} else {
-  return res.status(400).json({ error: "invalid target_type" });
-}
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
     targets = [...uniqueByDevice.values()];
