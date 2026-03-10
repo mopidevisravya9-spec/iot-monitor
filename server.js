@@ -795,9 +795,8 @@ app.get("/devices", (req, res) => {
   }
 });
 
-  app.post("/api/simple", requireAuth, (req, res) => {
+app.post("/api/simple", requireAuth, (req, res) => {
   try {
-
     const payload = req.body || {};
     const targetType = String(payload.target_type || "device");
     const targetValue = safeText(payload.target_value || payload.device_id);
@@ -809,60 +808,46 @@ app.get("/devices", (req, res) => {
 
     const now = Date.now();
     let targets = [];
-
-    // ======================
-    // DEVICE CLICKED
-    // ======================
     if (targetType === "device") {
 
-      const dev = getMergedDeviceById(targetValue);
-      if (!dev) {
-        return res.status(400).json({ error: "Device not found." });
-      }
+  const dev = getMergedDeviceById(targetValue);
+    if (!dev) return res.status(400).json({ error: "Device not found." });
 
-      // ONLY selected arm
-      targets = [dev];
+  // Always send only to that device
+  targets = [dev];
 
-    }
+  } else if (targetType === "junction") {
 
-    // ======================
-    // JUNCTION CLICKED
-    // ======================
-    else if (targetType === "junction") {
+  targets = getDevicesByJunction(targetValue);
 
-      targets = getDevicesByJunction(targetValue);
+    if (!targets.length) {
+    return res.status(400).json({ error: "No devices found in selected junction." });
+  }
 
-      if (!targets.length) {
-        return res.status(400).json({ error: "No devices found in selected junction." });
-      }
+  } else {
 
-    }
+  return res.status(400).json({ error: "invalid target_type" });
 
-    else {
-      return res.status(400).json({ error: "invalid target_type" });
-    }
+  }
 
-    // ======================
-    // AMBULANCE MODE
-    // ======================
-    if (force === "ambulance" && payload.source_device_id) {
-
+   if (force === "ambulance" && payload.source_device_id) {
       const sourceDev = getMergedDeviceById(String(payload.source_device_id));
-
       if (!sourceDev) {
         return res.status(400).json({ error: "Source device not found." });
       }
 
-      // Ambulance must alert all arms in that junction
       targets = getDevicesByJunction(sourceDev.junction_name);
-
       if (!targets.length) {
         return res.status(400).json({ error: "No devices found in source junction." });
       }
-
     }
-
-    // Remove duplicates
+    // When AUTO is sent after ambulance, restore whole junction
+     if (force === "" && payload.sig === undefined && targetType === "device") { 
+        const sourceDev = getMergedDeviceById(targetValue);
+     if (sourceDev) {
+        targets = getDevicesByJunction(sourceDev.junction_name);
+  }
+}
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
     targets = [...uniqueByDevice.values()];
@@ -871,12 +856,10 @@ app.get("/devices", (req, res) => {
     let offlineCount = 0;
 
     for (const dev of targets) {
-
       if (dev.status === "online") onlineCount++;
       else offlineCount++;
 
       const doc = ensureCloudForDevice(dev);
-
       applyMessageToDevice(
         doc,
         dev,
@@ -884,9 +867,7 @@ app.get("/devices", (req, res) => {
         now,
         String(dev.device_id) === String(payload.source_device_id || "")
       );
-
       writeCloudForDevice(dev, doc);
-
     }
 
     saveState();
@@ -898,11 +879,49 @@ app.get("/devices", (req, res) => {
       online_count: onlineCount,
       offline_count: offlineCount
     });
-
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
+
+app.get("/api/pull/:device_id", (req, res) => {
+  try {
+    const requestedKey = safeText(req.params.device_id);
+    let key = resolveCanonicalKey(requestedKey);
+    const since = Number(req.query.since || 0);
+
+    if (!CLOUD.has(key) && CLOUD.has(requestedKey)) {
+      key = requestedKey;
+    }
+
+    const doc = ensureCloudRow(key);
+    const v = Number(doc.v || 0);
+
+    if (since >= v) {
+      return res.json({ ok: true, changed: false, v });
+    }
+
+    res.json({
+      ok: true,
+      changed: true,
+      device_id: key,
+      v,
+      mode: doc.mode || "auto",
+      force: doc.force || "",
+      slot: doc.slot || { red: 0, amber: 0, green: 0, no: 0 },
+      packs: doc.packs || defaultPacks(),
+      slots: MSG_SLOTS,
+      updated_at: doc.updated_at || 0,
+      ambulanceActive: !!doc.ambulanceActive,
+      ambulanceArm: doc.ambulanceArm || "",
+      ambulanceL1: doc.ambulanceL1 || "",
+      ambulanceL2: doc.ambulanceL2 || ""
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
 // ======================
 // DASHBOARD HTML
 // ======================
