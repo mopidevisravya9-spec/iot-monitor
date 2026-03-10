@@ -1209,12 +1209,6 @@ function renderDashboardHTML() {
 </div>
 
 <script>
-  const navEntry = performance.getEntriesByType("navigation")[0];
-  if (navEntry && navEntry.type === "reload") {
-    localStorage.removeItem("arcadis_token");
-    location.href = "/login";
-  }
-
   const AUTH_TOKEN = localStorage.getItem("arcadis_token");
   if (!AUTH_TOKEN) location.href = "/login";
 
