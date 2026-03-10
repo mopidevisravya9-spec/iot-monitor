@@ -28,24 +28,29 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "";
 function safeText(v) {
   return String(v || "").trim();
 }
+
 function normJunction(v) {
   const x = safeText(v);
   return x || "Junction Not Sent";
 }
+
 function normArm(v) {
   const x = safeText(v);
   return x || "Road";
 }
+
 function clampSlot(n) {
   const x = Number.isFinite(n) ? n : 0;
   if (x < 0) return 0;
   if (x >= MSG_SLOTS) return MSG_SLOTS - 1;
   return x;
 }
+
 function isLiveOnline(dev) {
   if (!dev) return false;
   return Date.now() - Number(dev.last_seen || 0) <= OFFLINE_AFTER_MS;
 }
+
 function normalizePack(arr) {
   const safe = Array.isArray(arr) ? arr : [];
   const out = [];
@@ -55,6 +60,7 @@ function normalizePack(arr) {
   }
   return out;
 }
+
 function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
@@ -108,16 +114,16 @@ const signals = ["red", "amber", "green", "no"];
 // ======================
 // STATE
 // ======================
-const DEVICES = new Map();          // canonical device_id => device row
-const CLOUD = new Map();            // canonical device_id => cloud row
-const VIRTUAL_DEVICES = new Map();  // virtual device_id => device row
-const VIRTUAL_CLOUD = new Map();    // virtual device_id => cloud row
-const DEVICE_ALIASES = new Map();   // alias(raw/final) => canonical
+const DEVICES = new Map();
+const CLOUD = new Map();
+const VIRTUAL_DEVICES = new Map();
+const VIRTUAL_CLOUD = new Map();
+const DEVICE_ALIASES = new Map();
 
 function makeCloudDoc(device_id) {
   return {
     device_id,
-    mode: "auto", // auto | force_red | force_amber | force_green | ambulance
+    mode: "auto",
     force: "",
     slot: { red: 0, amber: 0, green: 0, no: 0 },
     packs: defaultPacks(),
@@ -134,6 +140,7 @@ function ensureCloudRow(device_id) {
   if (!CLOUD.has(device_id)) CLOUD.set(device_id, makeCloudDoc(device_id));
   return CLOUD.get(device_id);
 }
+
 function ensureVirtualCloudRow(device_id) {
   if (!VIRTUAL_CLOUD.has(device_id)) VIRTUAL_CLOUD.set(device_id, makeCloudDoc(device_id));
   return VIRTUAL_CLOUD.get(device_id);
@@ -141,11 +148,13 @@ function ensureVirtualCloudRow(device_id) {
 
 function rebuildAliases() {
   DEVICE_ALIASES.clear();
+
   for (const [k, d] of DEVICES.entries()) {
     DEVICE_ALIASES.set(k, k);
     if (safeText(d.raw_device_id)) DEVICE_ALIASES.set(safeText(d.raw_device_id), k);
     if (safeText(d.arm_name)) DEVICE_ALIASES.set(safeText(d.arm_name), k);
   }
+
   for (const [k] of VIRTUAL_DEVICES.entries()) {
     DEVICE_ALIASES.set(k, k);
   }
@@ -153,16 +162,22 @@ function rebuildAliases() {
 
 function resolveCanonicalKey(anyKey) {
   const key = safeText(anyKey);
-  return DEVICE_ALIASES.get(key) || key;
+  if (DEVICE_ALIASES.has(key)) return DEVICE_ALIASES.get(key);
+
+  for (const [k, d] of DEVICES.entries()) {
+    if (safeText(d.raw_device_id) === key) return k;
+    if (safeText(d.device_id) === key) return k;
+    if (safeText(d.arm_name) === key) return k;
+  }
+
+  return key;
 }
 
 function saveState() {
   try {
-    const canonicalDevices = [...DEVICES.entries()];
-    const canonicalCloud = [...CLOUD.entries()].filter(([k]) => !safeText(k).startsWith("__alias__"));
     const state = {
-      devices: canonicalDevices,
-      cloud: canonicalCloud
+      devices: [...DEVICES.entries()],
+      cloud: [...CLOUD.entries()]
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
   } catch (e) {
@@ -175,8 +190,9 @@ function loadState() {
     if (!fs.existsSync(STATE_FILE)) return;
     const raw = fs.readFileSync(STATE_FILE, "utf8");
     const state = JSON.parse(raw || "{}");
-    for (const [k, v] of (state.devices || [])) DEVICES.set(k, v);
-    for (const [k, v] of (state.cloud || [])) CLOUD.set(k, v);
+
+    for (const [k, v] of state.devices || []) DEVICES.set(k, v);
+    for (const [k, v] of state.cloud || []) CLOUD.set(k, v);
   } catch (e) {
     console.log("State load error:", e.message);
   }
@@ -185,6 +201,7 @@ function loadState() {
 function cleanDeadDevices() {
   const now = Date.now();
   let changed = false;
+
   for (const [device_id, dev] of DEVICES.entries()) {
     if (dev.permanent) continue;
     if (now - Number(dev.last_seen || 0) > OFFLINE_AFTER_MS * 20) {
@@ -193,11 +210,13 @@ function cleanDeadDevices() {
       changed = true;
     }
   }
+
   if (changed) rebuildAliases();
 }
 
 function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
   let changed = false;
+
   for (const [key, dev] of DEVICES.entries()) {
     if (dev.permanent) continue;
     if (key !== keepKey && safeText(dev.raw_device_id) === safeText(rawDeviceId)) {
@@ -206,6 +225,7 @@ function removeDuplicatesForRawDevice(rawDeviceId, keepKey) {
       changed = true;
     }
   }
+
   if (changed) rebuildAliases();
 }
 
@@ -213,21 +233,23 @@ function removeConflictingFinalKey(finalKey, rawDeviceId) {
   const existing = DEVICES.get(finalKey);
   if (!existing) return;
   if (existing.permanent) return;
+
   if (safeText(existing.raw_device_id) !== safeText(rawDeviceId)) {
-    CLOUD.delete(finalKey);
     DEVICES.delete(finalKey);
+    CLOUD.delete(finalKey);
     rebuildAliases();
   }
 }
 
 // ======================
-// AUTH - STATELESS TOKEN
+// AUTH
 // ======================
 function createAuthToken(username) {
   const payload = {
     u: username,
     exp: Date.now() + 1000 * 60 * 60 * 24 * 30
   };
+
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = crypto.createHmac("sha256", AUTH_SECRET).update(payloadB64).digest("base64url");
   return payloadB64 + "." + sig;
@@ -235,13 +257,14 @@ function createAuthToken(username) {
 
 function verifyAuthToken(token) {
   if (!token || !token.includes(".")) return false;
+
   const [payloadB64, sig] = token.split(".");
   const expected = crypto.createHmac("sha256", AUTH_SECRET).update(payloadB64).digest("base64url");
   if (sig !== expected) return false;
+
   try {
     const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-    if (!payload.exp || Date.now() > payload.exp) return false;
-    return true;
+    return !!payload.exp && Date.now() <= payload.exp;
   } catch {
     return false;
   }
@@ -254,7 +277,7 @@ function requireAuth(req, res, next) {
 }
 
 // ======================
-// TEST DEVICES
+// VIRTUAL DEVICES
 // ======================
 function seedVirtualDevices() {
   const now = Date.now();
@@ -272,7 +295,7 @@ function seedVirtualDevices() {
     }
   ];
 
-  items.forEach(d => {
+  items.forEach((d) => {
     VIRTUAL_DEVICES.set(d.device_id, d);
     ensureVirtualCloudRow(d.device_id);
   });
@@ -280,7 +303,7 @@ function seedVirtualDevices() {
 seedVirtualDevices();
 
 // ======================
-// REAL JUNCTIONS (PRELOAD)
+// REAL JUNCTIONS
 // ======================
 function seedRealJunctions() {
   const items = [
@@ -325,8 +348,8 @@ function seedRealJunctions() {
     }
   ];
 
-  items.forEach(j => {
-    j.arms.forEach(a => {
+  items.forEach((j) => {
+    j.arms.forEach((a) => {
       const device_id = a.id;
       if (!DEVICES.has(device_id)) {
         DEVICES.set(device_id, {
@@ -364,6 +387,7 @@ function allDevicesMerged() {
       latestByRaw.set(dev.device_id, dev);
       continue;
     }
+
     const raw = safeText(dev.raw_device_id || dev.device_id);
     const existing = latestByRaw.get(raw);
     if (!existing || Number(dev.last_seen || 0) > Number(existing.last_seen || 0)) {
@@ -371,7 +395,7 @@ function allDevicesMerged() {
     }
   }
 
-  const out = [...latestByRaw.values()].map(d => ({
+  const out = [...latestByRaw.values()].map((d) => ({
     device_id: d.device_id,
     raw_device_id: d.raw_device_id,
     junction_name: normJunction(d.junction_name),
@@ -409,18 +433,21 @@ function allDevicesMerged() {
 
 function getMergedDeviceById(device_id) {
   const key = resolveCanonicalKey(device_id);
+
   if (DEVICES.has(key)) {
     const d = DEVICES.get(key);
     return { ...d, status: isLiveOnline(d) ? "online" : "offline", virtual: false };
   }
+
   if (VIRTUAL_DEVICES.has(key)) {
     return { ...VIRTUAL_DEVICES.get(key), status: "online", virtual: true };
   }
+
   return null;
 }
 
 function getDevicesByJunction(junction_name) {
-  return allDevicesMerged().filter(d => d.junction_name === junction_name);
+  return allDevicesMerged().filter((d) => d.junction_name === junction_name);
 }
 
 // ======================
@@ -429,18 +456,23 @@ function getDevicesByJunction(junction_name) {
 function getCloudStoreForDevice(dev) {
   return dev.virtual ? VIRTUAL_CLOUD : CLOUD;
 }
+
 function ensureCloudForDevice(dev) {
   return dev.virtual ? ensureVirtualCloudRow(dev.device_id) : ensureCloudRow(dev.device_id);
 }
+
 function writeCloudForDevice(dev, doc) {
   if (dev.virtual) {
     VIRTUAL_CLOUD.set(dev.device_id, doc);
     return;
   }
+
   CLOUD.set(dev.device_id, doc);
+
   if (safeText(dev.raw_device_id) && safeText(dev.raw_device_id) !== safeText(dev.device_id)) {
     DEVICE_ALIASES.set(safeText(dev.raw_device_id), dev.device_id);
   }
+
   if (safeText(dev.arm_name) && safeText(dev.arm_name) !== safeText(dev.device_id)) {
     DEVICE_ALIASES.set(safeText(dev.arm_name), dev.device_id);
   }
@@ -529,14 +561,14 @@ app.get("/api/ping", (req, res) => {
   res.json({ ok: true, time: Date.now() });
 });
 
-if (SELF_URL) {
+if (SELF_URL && typeof fetch === "function") {
   setInterval(() => {
     fetch(SELF_URL.replace(/\/$/, "") + "/api/ping").catch(() => {});
   }, 240000);
 }
 
 // ======================
-// HOME / LOGIN / DASHBOARD
+// ROUTES
 // ======================
 app.get("/", (req, res) => res.redirect("/login"));
 
@@ -642,14 +674,12 @@ app.get("/login", (req, res) => {
   function unlock(){ u.removeAttribute("readonly"); p.removeAttribute("readonly"); }
   u.addEventListener("focus", unlock, { once:true });
   p.addEventListener("focus", unlock, { once:true });
-  window.addEventListener("load", ()=>{ u.value=""; p.value=""; });
 
-  const saved = localStorage.getItem("arcadis_token");
-  if (saved) {
-    fetch("/api/session-check", { headers: { "X-Auth-Token": saved } })
-      .then(r => { if (r.ok) location.href="/dashboard"; else localStorage.removeItem("arcadis_token"); })
-      .catch(()=>{});
-  }
+  window.addEventListener("load", ()=>{
+    u.value = "";
+    p.value = "";
+    localStorage.removeItem("arcadis_token");
+  });
 
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
@@ -681,6 +711,7 @@ app.post("/login", (req, res) => {
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
     return res.status(401).json({ error: "Invalid username or password" });
   }
+
   const token = createAuthToken(username);
   return res.json({ ok: true, token });
 });
@@ -693,9 +724,6 @@ app.get("/dashboard", (req, res) => {
   res.send(renderDashboardHTML());
 });
 
-// ======================
-// REGISTER / HEARTBEAT
-// ======================
 function upsertLiveDevice(req, res) {
   try {
     const body = req.body || {};
@@ -704,12 +732,22 @@ function upsertLiveDevice(req, res) {
 
     const jn = safeText(body.junction_name || body.junction);
     const arm = safeText(body.arm_name);
-    const finalDeviceId = arm || rawDeviceId;
+
+    let finalDeviceId = arm || rawDeviceId;
+
+    const canonicalByArm = resolveCanonicalKey(finalDeviceId);
+    if (DEVICES.has(canonicalByArm)) {
+      finalDeviceId = canonicalByArm;
+    } else {
+      const canonicalByRaw = resolveCanonicalKey(rawDeviceId);
+      if (DEVICES.has(canonicalByRaw)) finalDeviceId = canonicalByRaw;
+    }
 
     removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
     removeConflictingFinalKey(finalDeviceId, rawDeviceId);
 
     const old = DEVICES.get(finalDeviceId) || { permanent: false };
+
     const next = {
       device_id: finalDeviceId,
       raw_device_id: rawDeviceId,
@@ -738,29 +776,25 @@ function upsertLiveDevice(req, res) {
 app.post("/register", upsertLiveDevice);
 app.post("/heartbeat", upsertLiveDevice);
 
-// ======================
-// DEVICES LIST
-// ======================
 app.get("/devices", (req, res) => {
   try {
-    res.json(allDevicesMerged().map(d => ({
-      device_id: d.device_id,
-      junction_name: d.junction_name,
-      arm_name: d.arm_name,
-      lat: d.lat,
-      lng: d.lng,
-      last_seen: d.last_seen,
-      status: d.status,
-      virtual: !!d.virtual
-    })));
+    res.json(
+      allDevicesMerged().map((d) => ({
+        device_id: d.device_id,
+        junction_name: d.junction_name,
+        arm_name: d.arm_name,
+        lat: d.lat,
+        lng: d.lng,
+        last_seen: d.last_seen,
+        status: d.status,
+        virtual: !!d.virtual
+      }))
+    );
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
 
-// ======================
-// SEND MESSAGE
-// ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
     const payload = req.body || {};
@@ -798,6 +832,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
       if (!sourceDev) {
         return res.status(400).json({ error: "Source device not found." });
       }
+
       targets = getDevicesByJunction(sourceDev.junction_name);
       if (!targets.length) {
         return res.status(400).json({ error: "No devices found in source junction." });
@@ -830,7 +865,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
 
     res.json({
       ok: true,
-      updated_devices: targets.map(d => d.device_id),
+      updated_devices: targets.map((d) => d.device_id),
       count: targets.length,
       online_count: onlineCount,
       offline_count: offlineCount
@@ -840,14 +875,15 @@ app.post("/api/simple", requireAuth, (req, res) => {
   }
 });
 
-// ======================
-// ESP PULL - ONLY ONE ROUTE
-// ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
     const requestedKey = safeText(req.params.device_id);
-    const key = resolveCanonicalKey(requestedKey);
+    let key = resolveCanonicalKey(requestedKey);
     const since = Number(req.query.since || 0);
+
+    if (!CLOUD.has(key) && CLOUD.has(requestedKey)) {
+      key = requestedKey;
+    }
 
     const doc = ensureCloudRow(key);
     const v = Number(doc.v || 0);
@@ -893,7 +929,7 @@ function renderDashboardHTML() {
 
 <style>
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
+  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
   :root{
     --orange:#f97316;
     --orange2:#fb923c;
@@ -902,11 +938,21 @@ function renderDashboardHTML() {
     --border:#fed7aa;
     --muted:#6b7280;
   }
-  .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
+  .app{
+    height:100vh;
+    display:grid;
+    grid-template-columns:320px 1fr;
+    gap:12px;
+    padding:12px;
+    background:var(--bg);
+  }
   .sidebar{
-    width:320px;min-width:320px;background:var(--card);
-    border:1px solid var(--border);border-radius:16px;
-    display:flex;flex-direction:column;padding:14px 12px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    display:flex;
+    flex-direction:column;
+    padding:14px 12px;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
     overflow:auto;
   }
@@ -919,24 +965,42 @@ function renderDashboardHTML() {
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
   .tabBtn{
-    width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;
-    user-select:none;border:1px solid var(--border);background:#fff;
-    font-weight:900;letter-spacing:.5px;transition:.12s ease;
+    width:100%;
+    padding:14px;
+    border-radius:14px;
+    cursor:pointer;
+    user-select:none;
+    border:1px solid var(--border);
+    background:#fff;
+    font-weight:900;
+    letter-spacing:.5px;
+    transition:.12s ease;
   }
   .tabBtn + .tabBtn{margin-top:10px}
   .tabBtn.active{
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;border-color:var(--orange2);
+    color:#fff;
+    border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
   .treeBox{
-    margin-top:12px;border:1px solid var(--border);border-radius:14px;
-    background:#fffaf5;padding:10px;
+    margin-top:12px;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:#fffaf5;
+    padding:10px;
+    display:none;
   }
   .treeTitle{font-weight:900;margin-bottom:8px}
   .jBtn,.dBtn{
-    width:100%;text-align:left;padding:10px 12px;border-radius:12px;
-    border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:900;
+    width:100%;
+    text-align:left;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    cursor:pointer;
+    font-weight:900;
   }
   .jBtn{margin-top:8px}
   .dBtn{margin-top:8px;font-weight:800}
@@ -947,14 +1011,25 @@ function renderDashboardHTML() {
   }
   .smallNote{margin-top:8px;font-size:12px;color:var(--muted);font-weight:800}
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
+
   .content{
-    flex:1;display:flex;flex-direction:column;background:var(--card);
-    border:1px solid var(--border);border-radius:16px;overflow:hidden;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);position:relative;
+    min-width:0;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
   .topbar{
-    height:54px;display:flex;align-items:center;justify-content:flex-end;
-    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
+    height:54px;
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    padding:0 12px;
+    border-bottom:1px solid var(--border);
+    background:#fff;
   }
   .iconBtn{
     width:42px;height:42px;border-radius:14px;
@@ -966,30 +1041,56 @@ function renderDashboardHTML() {
   }
   .iconBtn svg{width:20px;height:20px;fill:#fff}
   .cards{
-    display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
-    background:#fff;flex-wrap:wrap;
+    display:flex;
+    gap:10px;
+    padding:10px;
+    border-bottom:1px solid var(--border);
+    background:#fff;
+    flex-wrap:wrap;
   }
   .card{
-    flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px;
+    flex:0 0 220px;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:#fff;
+    padding:10px 12px;
   }
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
-  .view{display:none;flex:1}
+
+  .view{display:none;flex:1;min-height:0}
   .view.active{display:flex;flex-direction:column}
-  #map{flex:1}
-  .pad{padding:12px}
-  .panel{max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
+  #viewMap{padding:0}
+  #map{flex:1;min-height:400px;width:100%}
+
+  .pad{padding:12px;overflow:auto}
+  .panel{
+    max-width:1100px;
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:14px;
+    background:#fff;
+  }
   .h1{font-weight:900;font-size:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
   .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
   input,select,button{
-    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;
+    width:100%;
+    padding:11px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    color:#111827;
+    outline:none;
+    font-size:14px;
     font-family:"Times New Roman", Times, serif;
   }
   button.sendBtn{
-    cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));
-    border-color:var(--orange2);color:#fff;font-weight:900;
+    cursor:pointer;
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
+    border-color:var(--orange2);
+    color:#fff;
+    font-weight:900;
   }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
@@ -1008,15 +1109,17 @@ function renderDashboardHTML() {
         <div class="brandSub">Arcadis Operations</div>
       </div>
     </div>
+
     <div class="divider"></div>
 
     <div class="tabBtn active" id="tabMapBtn">MAP</div>
     <div class="tabBtn" id="tabMsgBtn">MESSAGES</div>
 
-    <div id="treeContainer" class="treeBox" style="display:none">
+    <div id="treeContainer" class="treeBox">
       <div class="treeTitle">Junctions (Live)</div>
       <div id="treeBody"></div>
-
+      <div class="smallNote">Click device = one ESP only. Click junction = all devices in that junction.</div>
+    </div>
 
     <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
@@ -1037,7 +1140,9 @@ function renderDashboardHTML() {
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
     </div>
 
-    <div class="view active" id="viewMap"><div id="map"></div></div>
+    <div class="view active" id="viewMap">
+      <div id="map"></div>
+    </div>
 
     <div class="view" id="viewMsg">
       <div class="pad">
@@ -1101,6 +1206,12 @@ function renderDashboardHTML() {
 </div>
 
 <script>
+  const navEntry = performance.getEntriesByType("navigation")[0];
+  if (navEntry && navEntry.type === "reload") {
+    localStorage.removeItem("arcadis_token");
+    location.href = "/login";
+  }
+
   const AUTH_TOKEN = localStorage.getItem("arcadis_token");
   if (!AUTH_TOKEN) location.href = "/login";
 
@@ -1142,11 +1253,13 @@ function renderDashboardHTML() {
   async function secureFetch(url, options = {}) {
     const headers = Object.assign({}, options.headers || {}, { "X-Auth-Token": AUTH_TOKEN });
     const res = await fetch(url, { ...options, headers });
+
     if (res.status === 401) {
       localStorage.removeItem("arcadis_token");
       location.href = "/login";
       throw new Error("Unauthorized");
     }
+
     return res;
   }
 
@@ -1162,7 +1275,10 @@ function renderDashboardHTML() {
     viewMap.classList.toggle("active", which === "map");
     viewMsg.classList.toggle("active", which === "msg");
     treeContainer.style.display = which === "msg" ? "block" : "none";
-    if (which === "map") setTimeout(() => map.invalidateSize(), 150);
+
+    if (which === "map") {
+      setTimeout(() => map.invalidateSize(), 200);
+    }
   }
 
   tabMapBtn.addEventListener("click", () => showTab("map"));
@@ -1171,14 +1287,15 @@ function renderDashboardHTML() {
     buildTree();
   });
 
-  const map = L.map('map').setView([17.3850,78.4867], 12);
-  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
-    subdomains:['mt0','mt1','mt2','mt3'],
+  const map = L.map("map").setView([17.3850,78.4867], 12);
+  L.tileLayer("https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}", {
+    subdomains:["mt0","mt1","mt2","mt3"],
     maxZoom: 20
   }).addTo(map);
 
   const markers = new Map();
-  function pinIcon(status, virtual){
+
+  function pinIcon(status, virtual) {
     const fill = virtual ? "#2563eb" : (status === "online" ? "#16a34a" : "#dc2626");
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
@@ -1209,11 +1326,13 @@ function renderDashboardHTML() {
       currentLine.innerHTML = "Current: <b>JUNCTION</b> | <b>" + selectedTargetValue + "</b>";
       return;
     }
+
     const d = currentDeviceRow(devSel.value);
     if (!d) {
       currentLine.textContent = "Current: -";
       return;
     }
+
     currentLine.innerHTML =
       "Current: <b>" + d.device_id + "</b> | <b>" + d.status.toUpperCase() + "</b> | " + d.junction_name +
       (d.virtual ? " | TEST" : "");
@@ -1227,7 +1346,7 @@ function renderDashboardHTML() {
       {v:"amber", t:"AMBER"},
       {v:"green", t:"GREEN"},
       {v:"ambulance", t:"AMBULANCE"}
-    ].forEach(x=>{
+    ].forEach(x => {
       const o = document.createElement("option");
       o.value = x.v;
       o.textContent = x.t;
@@ -1327,9 +1446,11 @@ function renderDashboardHTML() {
     Object.keys(grouped).sort().forEach(junction => {
       const jBtn = document.createElement("button");
       jBtn.className = "jBtn";
+
       if (selectedTargetType === "junction" && selectedTargetValue === junction) {
         jBtn.classList.add("selectedTarget");
       }
+
       jBtn.textContent = junction + (expandedJunction === junction ? " ▲" : " ▼");
       jBtn.onclick = () => {
         selectedTargetType = "junction";
@@ -1346,13 +1467,15 @@ function renderDashboardHTML() {
         wrap.className = "indent";
 
         grouped[junction]
-          .sort((a,b)=>(a.device_id || "").localeCompare(b.device_id || ""))
+          .sort((a, b) => (a.device_id || "").localeCompare(b.device_id || ""))
           .forEach(dev => {
             const dBtn = document.createElement("button");
             dBtn.className = "dBtn";
+
             if (selectedTargetType === "device" && selectedTargetValue === dev.device_id) {
               dBtn.classList.add("selectedTarget");
             }
+
             dBtn.textContent = dev.device_id + " (" + dev.status + ")" + (dev.virtual ? " [TEST]" : "");
             dBtn.onclick = () => {
               selectedTargetType = "device";
@@ -1395,7 +1518,7 @@ function renderDashboardHTML() {
           "<br>Junction: <b>" + d.junction_name + "</b>" +
           "<br>Arm: <b>" + d.arm_name + "</b>" +
           "<br>Status: <b style='color:" + (d.status === "online" ? "#16a34a" : "#dc2626") + "'>" + d.status + "</b>" +
-          (virtual ? "<br><b style='color:#2563eb'>TEST DEVICE</b>" : "") +
+          (d.virtual ? "<br><b style='color:#2563eb'>TEST DEVICE</b>" : "") +
           "<br>Last seen: " + new Date(d.last_seen || 0).toLocaleString();
 
         if (markers.has(d.device_id)) {
@@ -1415,6 +1538,7 @@ function renderDashboardHTML() {
 
       const cur = devSel.value;
       devSel.innerHTML = "";
+
       DEVICE_CACHE.forEach(d => {
         const opt = document.createElement("option");
         opt.value = d.device_id;
@@ -1436,6 +1560,8 @@ function renderDashboardHTML() {
 
       updateCurrentLine();
       if (viewMsg.classList.contains("active")) buildTree();
+
+      setTimeout(() => map.invalidateSize(), 100);
     } catch (e) {}
   }
 
@@ -1449,7 +1575,7 @@ function renderDashboardHTML() {
     }
 
     const f = forceSel.value || "";
-    let payload = {
+    const payload = {
       target_type: targetType,
       target_value: targetValue,
       force: f
@@ -1524,7 +1650,7 @@ function renderDashboardHTML() {
 }
 
 // ======================
-// START SERVER
+// START
 // ======================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server started on port " + PORT));
