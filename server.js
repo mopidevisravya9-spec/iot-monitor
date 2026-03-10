@@ -809,15 +809,13 @@ app.post("/api/simple", requireAuth, (req, res) => {
     const now = Date.now();
     let targets = [];
 
-    if (targetType === "device") {
-      const dev = getMergedDeviceById(targetValue);
-      if (!dev) return res.status(400).json({ error: "Device not found." });
+   if (targetType === "device") {
+  const dev = getMergedDeviceById(targetValue);
+  if (!dev) return res.status(400).json({ error: "Device not found." });
 
-      if (force === "ambulance" || force === "") {
-        targets = getDevicesByJunction(dev.junction_name);
-      } else {
-        targets = [dev];
-      }
+  // single ESP update
+  targets = [dev];
+}
     } else if (targetType === "junction") {
       targets = getDevicesByJunction(targetValue);
       if (!targets.length) {
