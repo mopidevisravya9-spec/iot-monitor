@@ -846,9 +846,8 @@ app.post("/api/simple", requireAuth, (req, res) => {
      const sourceDev = getMergedDeviceById(targetValue);
    if (sourceDev) {
     targets = getDevicesByJunction(sourceDev.junction_name);
-  }
-}
-}
+    }
+ }
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
     targets = [...uniqueByDevice.values()];
