@@ -69,10 +69,10 @@ function defaultPacks() {
   const pack = (pairs) => pairs.map(([l1, l2]) => ({ l1, l2 }));
   return {
     red: pack([
-      ["HURRY ENDS HERE", "YOUR FAMILY WAITS — NOT YOUR SPEED"],
+      ["HURRY ENDS HERE", "YOUR FAMILY WAITS - NOT YOUR SPEED"],
       ["ONE SECOND OF PATIENCE", "CAN BUY A LIFETIME OF PEACE"],
       ["BRAKE NOW", "REGRET IS HEAVIER THAN YOUR FOOT"],
-      ["THE ROAD IS NOT A GAME", "PAUSE — PROTECT SOMEONE'S FUTURE"],
+      ["THE ROAD IS NOT A GAME", "PAUSE - PROTECT SOMEONE'S FUTURE"],
       ["STOPPING IS STRENGTH", "SMART DRIVERS LIVE LONGER"]
     ]),
     amber: pack([
@@ -101,10 +101,10 @@ function defaultPacks() {
 
 function ambulanceSlogans() {
   return [
-    "GIVE WAY TO AMBULANCE — EVERY SECOND CAN SAVE A LIFE",
-    "CLEAR THE ROAD — AN AMBULANCE CARRIES HOPE",
-    "DON'T BLOCK THE WAY — SOMEONE NEEDS URGENT HELP",
-    "MAKE SPACE FOR AMBULANCE — LIFE MUST MOVE FIRST",
+    "GIVE WAY TO AMBULANCE - EVERY SECOND CAN SAVE A LIFE",
+    "CLEAR THE ROAD - AN AMBULANCE CARRIES HOPE",
+    "DON'T BLOCK THE WAY - SOMEONE NEEDS URGENT HELP",
+    "MAKE SPACE FOR AMBULANCE - LIFE MUST MOVE FIRST",
     "YOUR ONE MOVE CAN GIVE SOMEONE ANOTHER CHANCE TO LIVE"
   ];
 }
@@ -162,7 +162,6 @@ function rebuildAliases() {
 
 function resolveCanonicalKey(anyKey) {
   const key = safeText(anyKey);
-
   if (DEVICE_ALIASES.has(key)) return DEVICE_ALIASES.get(key);
 
   for (const [k, d] of DEVICES.entries()) {
@@ -192,8 +191,8 @@ function loadState() {
     const raw = fs.readFileSync(STATE_FILE, "utf8");
     const state = JSON.parse(raw || "{}");
 
-    for (const [k, v] of (state.devices || [])) DEVICES.set(k, v);
-    for (const [k, v] of (state.cloud || [])) CLOUD.set(k, v);
+    for (const [k, v] of state.devices || []) DEVICES.set(k, v);
+    for (const [k, v] of state.cloud || []) CLOUD.set(k, v);
   } catch (e) {
     console.log("State load error:", e.message);
   }
@@ -250,6 +249,7 @@ function createAuthToken(username) {
     u: username,
     exp: Date.now() + 1000 * 60 * 60 * 24 * 30
   };
+
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = crypto.createHmac("sha256", AUTH_SECRET).update(payloadB64).digest("base64url");
   return payloadB64 + "." + sig;
@@ -264,8 +264,7 @@ function verifyAuthToken(token) {
 
   try {
     const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
-    if (!payload.exp || Date.now() > payload.exp) return false;
-    return true;
+    return !!payload.exp && Date.now() <= payload.exp;
   } catch {
     return false;
   }
@@ -278,7 +277,7 @@ function requireAuth(req, res, next) {
 }
 
 // ======================
-// TEST DEVICES
+// VIRTUAL DEVICES
 // ======================
 function seedVirtualDevices() {
   const now = Date.now();
@@ -376,28 +375,27 @@ seedRealJunctions();
 rebuildAliases();
 
 // ======================
-// LOOKUPS
+// DEVICE LOOKUPS
 // ======================
 function allDevicesMerged() {
   cleanDeadDevices();
 
-  const unique = new Map();
+  const latestByRaw = new Map();
 
   for (const dev of DEVICES.values()) {
     if (dev.permanent) {
-      unique.set(dev.device_id, dev);
+      latestByRaw.set(dev.device_id, dev);
       continue;
     }
 
     const raw = safeText(dev.raw_device_id || dev.device_id);
-    const old = unique.get(raw);
-
-    if (!old || Number(dev.last_seen || 0) > Number(old.last_seen || 0)) {
-      unique.set(raw, dev);
+    const existing = latestByRaw.get(raw);
+    if (!existing || Number(dev.last_seen || 0) > Number(existing.last_seen || 0)) {
+      latestByRaw.set(raw, dev);
     }
   }
 
-  const out = [...unique.values()].map((d) => ({
+  const out = [...latestByRaw.values()].map((d) => ({
     device_id: d.device_id,
     raw_device_id: d.raw_device_id,
     junction_name: normJunction(d.junction_name),
@@ -455,6 +453,10 @@ function getDevicesByJunction(junction_name) {
 // ======================
 // CLOUD HELPERS
 // ======================
+function getCloudStoreForDevice(dev) {
+  return dev.virtual ? VIRTUAL_CLOUD : CLOUD;
+}
+
 function ensureCloudForDevice(dev) {
   return dev.virtual ? ensureVirtualCloudRow(dev.device_id) : ensureCloudRow(dev.device_id);
 }
@@ -467,8 +469,13 @@ function writeCloudForDevice(dev, doc) {
 
   CLOUD.set(dev.device_id, doc);
 
-  if (safeText(dev.raw_device_id)) DEVICE_ALIASES.set(safeText(dev.raw_device_id), dev.device_id);
-  if (safeText(dev.arm_name)) DEVICE_ALIASES.set(safeText(dev.arm_name), dev.device_id);
+  if (safeText(dev.raw_device_id) && safeText(dev.raw_device_id) !== safeText(dev.device_id)) {
+    DEVICE_ALIASES.set(safeText(dev.raw_device_id), dev.device_id);
+  }
+
+  if (safeText(dev.arm_name) && safeText(dev.arm_name) !== safeText(dev.device_id)) {
+    DEVICE_ALIASES.set(safeText(dev.arm_name), dev.device_id);
+  }
 }
 
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
@@ -547,37 +554,6 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   doc.updated_at = now;
 }
 
-function expandTargets(targetType, targetValue, force, payload) {
-  let targets = [];
-
-  if (targetType === "device") {
-    const dev = getMergedDeviceById(targetValue);
-    if (!dev) throw new Error("Device not found.");
-
-    if (force === "" || force === "ambulance") {
-      targets = getDevicesByJunction(dev.junction_name);
-    } else {
-      targets = [dev];
-    }
-  } else if (targetType === "junction") {
-    targets = getDevicesByJunction(targetValue);
-    if (!targets.length) throw new Error("No devices found in selected junction.");
-  } else {
-    throw new Error("invalid target_type");
-  }
-
-  if (force === "ambulance" && payload.source_device_id) {
-    const sourceDev = getMergedDeviceById(String(payload.source_device_id));
-    if (!sourceDev) throw new Error("Source device not found.");
-    targets = getDevicesByJunction(sourceDev.junction_name);
-    if (!targets.length) throw new Error("No devices found in source junction.");
-  }
-
-  const uniqueByDevice = new Map();
-  for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
-  return [...uniqueByDevice.values()];
-}
-
 // ======================
 // KEEP ALIVE
 // ======================
@@ -592,7 +568,7 @@ if (SELF_URL && typeof fetch === "function") {
 }
 
 // ======================
-// HOME / LOGIN / DASHBOARD
+// ROUTES
 // ======================
 app.get("/", (req, res) => res.redirect("/login"));
 
@@ -714,13 +690,11 @@ app.get("/login", (req, res) => {
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ username: u.value.trim(), password: p.value })
       });
-
       const out = await r.json().catch(()=>({}));
       if(!r.ok){
         err.textContent = out.error || "Invalid login";
         return;
       }
-
       localStorage.setItem("arcadis_token", out.token);
       location.href = "/dashboard";
     }catch(e){
@@ -737,6 +711,7 @@ app.post("/login", (req, res) => {
   if (String(username || "") !== ADMIN_USER || String(password || "") !== ADMIN_PASS) {
     return res.status(401).json({ error: "Invalid username or password" });
   }
+
   const token = createAuthToken(username);
   return res.json({ ok: true, token });
 });
@@ -749,9 +724,6 @@ app.get("/dashboard", (req, res) => {
   res.send(renderDashboardHTML());
 });
 
-// ======================
-// REGISTER / HEARTBEAT
-// ======================
 function upsertLiveDevice(req, res) {
   try {
     const body = req.body || {};
@@ -762,13 +734,13 @@ function upsertLiveDevice(req, res) {
     const arm = safeText(body.arm_name);
 
     let finalDeviceId = arm || rawDeviceId;
-    const aliasKey = resolveCanonicalKey(finalDeviceId);
 
-    if (DEVICES.has(aliasKey)) {
-      finalDeviceId = aliasKey;
+    const canonicalByArm = resolveCanonicalKey(finalDeviceId);
+    if (DEVICES.has(canonicalByArm)) {
+      finalDeviceId = canonicalByArm;
     } else {
-      const rawAlias = resolveCanonicalKey(rawDeviceId);
-      if (DEVICES.has(rawAlias)) finalDeviceId = rawAlias;
+      const canonicalByRaw = resolveCanonicalKey(rawDeviceId);
+      if (DEVICES.has(canonicalByRaw)) finalDeviceId = canonicalByRaw;
     }
 
     removeDuplicatesForRawDevice(rawDeviceId, finalDeviceId);
@@ -804,9 +776,6 @@ function upsertLiveDevice(req, res) {
 app.post("/register", upsertLiveDevice);
 app.post("/heartbeat", upsertLiveDevice);
 
-// ======================
-// DEVICES LIST
-// ======================
 app.get("/devices", (req, res) => {
   try {
     res.json(
@@ -826,9 +795,6 @@ app.get("/devices", (req, res) => {
   }
 });
 
-// ======================
-// SEND MESSAGE
-// ======================
 app.post("/api/simple", requireAuth, (req, res) => {
   try {
     const payload = req.body || {};
@@ -836,10 +802,49 @@ app.post("/api/simple", requireAuth, (req, res) => {
     const targetValue = safeText(payload.target_value || payload.device_id);
     const force = String(payload.force || "");
 
-    if (!targetValue) return res.status(400).json({ error: "target_value required" });
+    if (!targetValue) {
+      return res.status(400).json({ error: "target_value required" });
+    }
 
     const now = Date.now();
-    const targets = expandTargets(targetType, targetValue, force, payload);
+    let targets = [];
+    if (targetType === "device") {
+
+  const dev = getMergedDeviceById(targetValue);
+    if (!dev) return res.status(400).json({ error: "Device not found." });
+
+  // Always send only to that device
+  targets = [dev];
+
+  } else if (targetType === "junction") {
+
+  targets = getDevicesByJunction(targetValue);
+
+    if (!targets.length) {
+    return res.status(400).json({ error: "No devices found in selected junction." });
+  }
+
+  } else {
+
+  return res.status(400).json({ error: "invalid target_type" });
+
+  }
+
+   if (force === "ambulance" && payload.source_device_id) {
+      const sourceDev = getMergedDeviceById(String(payload.source_device_id));
+      if (!sourceDev) {
+        return res.status(400).json({ error: "Source device not found." });
+      }
+
+      targets = getDevicesByJunction(sourceDev.junction_name);
+      if (!targets.length) {
+        return res.status(400).json({ error: "No devices found in source junction." });
+      }
+    }
+
+    const uniqueByDevice = new Map();
+    for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
+    targets = [...uniqueByDevice.values()];
 
     let onlineCount = 0;
     let offlineCount = 0;
@@ -866,27 +871,13 @@ app.post("/api/simple", requireAuth, (req, res) => {
       updated_devices: targets.map((d) => d.device_id),
       count: targets.length,
       online_count: onlineCount,
-      offline_count: offlineCount,
-      applied_scope: (force === "" || force === "ambulance") ? "junction" : "device"
+      offline_count: offlineCount
     });
   } catch (e) {
-    const msg = String(e.message || e);
-    if (
-      msg === "Device not found." ||
-      msg === "Source device not found." ||
-      msg === "No devices found in selected junction." ||
-      msg === "No devices found in source junction." ||
-      msg === "invalid target_type"
-    ) {
-      return res.status(400).json({ error: msg });
-    }
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: String(e.message || e) });
   }
 });
 
-// ======================
-// ESP PULL
-// ======================
 app.get("/api/pull/:device_id", (req, res) => {
   try {
     const requestedKey = safeText(req.params.device_id);
@@ -941,7 +932,7 @@ function renderDashboardHTML() {
 
 <style>
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff;overflow:hidden;color:#111827}
+  html,body{height:100%;margin:0;font-family:"Times New Roman", Times, serif;background:#fff7ed;color:#111827}
   :root{
     --orange:#f97316;
     --orange2:#fb923c;
@@ -950,11 +941,21 @@ function renderDashboardHTML() {
     --border:#fed7aa;
     --muted:#6b7280;
   }
-  .app{height:100%;display:flex;gap:12px;padding:12px;background:var(--bg)}
+  .app{
+    height:100vh;
+    display:grid;
+    grid-template-columns:320px 1fr;
+    gap:12px;
+    padding:12px;
+    background:var(--bg);
+  }
   .sidebar{
-    width:320px;min-width:320px;background:var(--card);
-    border:1px solid var(--border);border-radius:16px;
-    display:flex;flex-direction:column;padding:14px 12px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    display:flex;
+    flex-direction:column;
+    padding:14px 12px;
     box-shadow:0 10px 26px rgba(17,24,39,.08);
     overflow:auto;
   }
@@ -967,24 +968,42 @@ function renderDashboardHTML() {
   .brandSub{font-size:12px;color:var(--muted);margin-top:2px;font-weight:800}
   .divider{height:1px;background:var(--border);margin:8px 6px}
   .tabBtn{
-    width:100%;padding:14px 14px;border-radius:14px;cursor:pointer;
-    user-select:none;border:1px solid var(--border);background:#fff;
-    font-weight:900;letter-spacing:.5px;transition:.12s ease;
+    width:100%;
+    padding:14px;
+    border-radius:14px;
+    cursor:pointer;
+    user-select:none;
+    border:1px solid var(--border);
+    background:#fff;
+    font-weight:900;
+    letter-spacing:.5px;
+    transition:.12s ease;
   }
   .tabBtn + .tabBtn{margin-top:10px}
   .tabBtn.active{
     background:linear-gradient(135deg,var(--orange),var(--orange2));
-    color:#fff;border-color:var(--orange2);
+    color:#fff;
+    border-color:var(--orange2);
     box-shadow:0 10px 22px rgba(249,115,22,.25);
   }
   .treeBox{
-    margin-top:12px;border:1px solid var(--border);border-radius:14px;
-    background:#fffaf5;padding:10px;
+    margin-top:12px;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:#fffaf5;
+    padding:10px;
+    display:none;
   }
   .treeTitle{font-weight:900;margin-bottom:8px}
   .jBtn,.dBtn{
-    width:100%;text-align:left;padding:10px 12px;border-radius:12px;
-    border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:900;
+    width:100%;
+    text-align:left;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    cursor:pointer;
+    font-weight:900;
   }
   .jBtn{margin-top:8px}
   .dBtn{margin-top:8px;font-weight:800}
@@ -995,14 +1014,25 @@ function renderDashboardHTML() {
   }
   .smallNote{margin-top:8px;font-size:12px;color:var(--muted);font-weight:800}
   .footer{margin-top:auto;padding:10px 10px 4px 10px;font-size:12px;color:var(--muted);font-weight:900}
+
   .content{
-    flex:1;display:flex;flex-direction:column;background:var(--card);
-    border:1px solid var(--border);border-radius:16px;overflow:hidden;
-    box-shadow:0 10px 26px rgba(17,24,39,.08);position:relative;
+    min-width:0;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    box-shadow:0 10px 26px rgba(17,24,39,.08);
   }
   .topbar{
-    height:54px;display:flex;align-items:center;justify-content:flex-end;
-    padding:0 12px;border-bottom:1px solid var(--border);background:#fff;
+    height:54px;
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    padding:0 12px;
+    border-bottom:1px solid var(--border);
+    background:#fff;
   }
   .iconBtn{
     width:42px;height:42px;border-radius:14px;
@@ -1014,30 +1044,56 @@ function renderDashboardHTML() {
   }
   .iconBtn svg{width:20px;height:20px;fill:#fff}
   .cards{
-    display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border);
-    background:#fff;flex-wrap:wrap;
+    display:flex;
+    gap:10px;
+    padding:10px;
+    border-bottom:1px solid var(--border);
+    background:#fff;
+    flex-wrap:wrap;
   }
   .card{
-    flex:0 0 240px;border:1px solid var(--border);border-radius:14px;background:#fff;padding:10px 12px;
+    flex:0 0 220px;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:#fff;
+    padding:10px 12px;
   }
   .card .k{font-size:11px;color:var(--muted);font-weight:900;letter-spacing:.6px}
   .card .v{font-size:22px;font-weight:900;margin-top:6px}
-  .view{display:none;flex:1}
+
+  .view{display:none;flex:1;min-height:0}
   .view.active{display:flex;flex-direction:column}
-  #map{flex:1}
-  .pad{padding:12px}
-  .panel{max-width:1100px;border:1px solid var(--border);border-radius:16px;padding:14px;background:#fff}
+  #viewMap{padding:0}
+  #map{flex:1;min-height:400px;width:100%}
+
+  .pad{padding:12px;overflow:auto}
+  .panel{
+    max-width:1100px;
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:14px;
+    background:#fff;
+  }
   .h1{font-weight:900;font-size:16px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
   .lbl{font-size:12px;color:var(--muted);font-weight:900;margin-bottom:6px}
   input,select,button{
-    width:100%;padding:11px;border-radius:12px;border:1px solid var(--border);
-    background:#fff;color:#111827;outline:none;font-size:14px;
+    width:100%;
+    padding:11px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#fff;
+    color:#111827;
+    outline:none;
+    font-size:14px;
     font-family:"Times New Roman", Times, serif;
   }
   button.sendBtn{
-    cursor:pointer;background:linear-gradient(135deg,var(--orange),var(--orange2));
-    border-color:var(--orange2);color:#fff;font-weight:900;
+    cursor:pointer;
+    background:linear-gradient(135deg,var(--orange),var(--orange2));
+    border-color:var(--orange2);
+    color:#fff;
+    font-weight:900;
   }
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
   .statusLine{margin-top:10px;font-size:12px;color:var(--muted);font-weight:900}
@@ -1062,7 +1118,7 @@ function renderDashboardHTML() {
     <div class="tabBtn active" id="tabMapBtn">MAP</div>
     <div class="tabBtn" id="tabMsgBtn">MESSAGES</div>
 
-    <div id="treeContainer" class="treeBox" style="display:none">
+    <div id="treeContainer" class="treeBox">
       <div class="treeTitle">Junctions (Live)</div>
       <div id="treeBody"></div>
       <div class="smallNote">Click device = one ESP only. Click junction = all devices in that junction.</div>
@@ -1087,7 +1143,9 @@ function renderDashboardHTML() {
       <div class="card"><div class="k">OFFLINE</div><div class="v" id="off">0</div></div>
     </div>
 
-    <div class="view active" id="viewMap"><div id="map"></div></div>
+    <div class="view active" id="viewMap">
+      <div id="map"></div>
+    </div>
 
     <div class="view" id="viewMsg">
       <div class="pad">
@@ -1151,6 +1209,12 @@ function renderDashboardHTML() {
 </div>
 
 <script>
+  const navEntry = performance.getEntriesByType("navigation")[0];
+  if (navEntry && navEntry.type === "reload") {
+    localStorage.removeItem("arcadis_token");
+    location.href = "/login";
+  }
+
   const AUTH_TOKEN = localStorage.getItem("arcadis_token");
   if (!AUTH_TOKEN) location.href = "/login";
 
@@ -1192,11 +1256,13 @@ function renderDashboardHTML() {
   async function secureFetch(url, options = {}) {
     const headers = Object.assign({}, options.headers || {}, { "X-Auth-Token": AUTH_TOKEN });
     const res = await fetch(url, { ...options, headers });
+
     if (res.status === 401) {
       localStorage.removeItem("arcadis_token");
       location.href = "/login";
       throw new Error("Unauthorized");
     }
+
     return res;
   }
 
@@ -1212,7 +1278,10 @@ function renderDashboardHTML() {
     viewMap.classList.toggle("active", which === "map");
     viewMsg.classList.toggle("active", which === "msg");
     treeContainer.style.display = which === "msg" ? "block" : "none";
-    if (which === "map") setTimeout(() => map.invalidateSize(), 150);
+
+    if (which === "map") {
+      setTimeout(() => map.invalidateSize(), 200);
+    }
   }
 
   tabMapBtn.addEventListener("click", () => showTab("map"));
@@ -1221,15 +1290,15 @@ function renderDashboardHTML() {
     buildTree();
   });
 
-  const map = L.map('map').setView([17.3850,78.4867], 12);
-  L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
-    subdomains:['mt0','mt1','mt2','mt3'],
+  const map = L.map("map").setView([17.3850,78.4867], 12);
+  L.tileLayer("https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}", {
+    subdomains:["mt0","mt1","mt2","mt3"],
     maxZoom: 20
   }).addTo(map);
 
   const markers = new Map();
 
-  function pinIcon(status, virtual){
+  function pinIcon(status, virtual) {
     const fill = virtual ? "#2563eb" : (status === "online" ? "#16a34a" : "#dc2626");
     const html = \`
       <div style="width:28px;height:28px;transform:translate(-14px,-28px);">
@@ -1280,7 +1349,7 @@ function renderDashboardHTML() {
       {v:"amber", t:"AMBER"},
       {v:"green", t:"GREEN"},
       {v:"ambulance", t:"AMBULANCE"}
-    ].forEach(x=>{
+    ].forEach(x => {
       const o = document.createElement("option");
       o.value = x.v;
       o.textContent = x.t;
@@ -1401,7 +1470,7 @@ function renderDashboardHTML() {
         wrap.className = "indent";
 
         grouped[junction]
-          .sort((a,b)=>(a.device_id || "").localeCompare(b.device_id || ""))
+          .sort((a, b) => (a.device_id || "").localeCompare(b.device_id || ""))
           .forEach(dev => {
             const dBtn = document.createElement("button");
             dBtn.className = "dBtn";
@@ -1452,7 +1521,7 @@ function renderDashboardHTML() {
           "<br>Junction: <b>" + d.junction_name + "</b>" +
           "<br>Arm: <b>" + d.arm_name + "</b>" +
           "<br>Status: <b style='color:" + (d.status === "online" ? "#16a34a" : "#dc2626") + "'>" + d.status + "</b>" +
-          (virtual ? "<br><b style='color:#2563eb'>TEST DEVICE</b>" : "") +
+          (d.virtual ? "<br><b style='color:#2563eb'>TEST DEVICE</b>" : "") +
           "<br>Last seen: " + new Date(d.last_seen || 0).toLocaleString();
 
         if (markers.has(d.device_id)) {
@@ -1494,6 +1563,8 @@ function renderDashboardHTML() {
 
       updateCurrentLine();
       if (viewMsg.classList.contains("active")) buildTree();
+
+      setTimeout(() => map.invalidateSize(), 100);
     } catch (e) {}
   }
 
@@ -1507,7 +1578,7 @@ function renderDashboardHTML() {
     }
 
     const f = forceSel.value || "";
-    let payload = {
+    const payload = {
       target_type: targetType,
       target_value: targetValue,
       force: f
@@ -1546,11 +1617,11 @@ function renderDashboardHTML() {
       }
 
       if (f === "ambulance") {
-        setStatus("Sent | Ambulance active | " + (out.count || 0) + " device(s)", true);
+        setStatus("Sent | Ambulance active | " + (out.online_count || 0) + " online, " + (out.offline_count || 0) + " queued", true);
       } else if (f === "") {
-        setStatus("Sent | Auto applied to all devices in junction | " + (out.count || 0) + " device(s)", true);
+        setStatus("Sent | Auto | " + (out.online_count || 0) + " online, " + (out.offline_count || 0) + " queued", true);
       } else {
-        setStatus("Sent | Junction/Device updated | " + (out.count || 0) + " device(s)", true);
+        setStatus("Sent | " + (out.online_count || 0) + " online, " + (out.offline_count || 0) + " queued", true);
       }
     } catch (e) {
       setStatus("Network error", false);
@@ -1582,7 +1653,7 @@ function renderDashboardHTML() {
 }
 
 // ======================
-// START SERVER
+// START
 // ======================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server started on port " + PORT));
