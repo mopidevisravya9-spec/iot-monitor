@@ -1016,8 +1016,6 @@ function renderDashboardHTML() {
     <div id="treeContainer" class="treeBox" style="display:none">
       <div class="treeTitle">Junctions (Live)</div>
       <div id="treeBody"></div>
-      <div class="smallNote">Click device = one ESP only. Click junction = all devices in that junction. Ambulance on one device will update the full junction.</div>
-    </div>
 
     <div class="footer">Powered by <b>Arcadis</b></div>
   </div>
