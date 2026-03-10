@@ -841,7 +841,14 @@ app.post("/api/simple", requireAuth, (req, res) => {
         return res.status(400).json({ error: "No devices found in source junction." });
       }
     }
-
+   // When AUTO is sent after ambulance, restore whole junction
+   if (force === "" && targetType === "device") {
+     const sourceDev = getMergedDeviceById(targetValue);
+   if (sourceDev) {
+    targets = getDevicesByJunction(sourceDev.junction_name);
+  }
+}
+}
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
     targets = [...uniqueByDevice.values()];
