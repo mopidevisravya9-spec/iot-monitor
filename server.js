@@ -844,16 +844,16 @@ app.post("/api/simple", requireAuth, (req, res) => {
     // When AUTO is sent after ambulance, restore whole junction
      // AUTO should restore whole junction
 // AUTO → restore whole junction
-if (force === "" && !payload.sig)  {
+if (force === "" && !payload.sig) {
 
   if (targetType === "device") {
     const dev = getMergedDeviceById(targetValue);
     if (dev) targets = getDevicesByJunction(dev.junction_name);
   }
-    // if user selected a junction
-    if (targetType === "junction") {
-        targets = getDevicesByJunction(targetValue);
-    }
+
+  if (targetType === "junction") {
+    targets = getDevicesByJunction(targetValue);
+  }
 }
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
@@ -1606,11 +1606,11 @@ function renderDashboardHTML() {
       payload.source_device_id = sourceDev;
       payload.amb_slot = Number(ambSel.value || 0);
       payload.amb_text = ambPreview.value || "";
-    } else {
+    } else if (f !== "") {
       payload.sig = sigSel.value;
       payload.slot = Number(slotSel.value || 0);
       payload.line1 = line1.value || "";
-      payload.line2 = line2.value || "";
+       payload.line2 = line2.value || "";
     }
 
     setStatus("Sending...", true);
