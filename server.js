@@ -496,18 +496,18 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
     slotObj[s] = sl;
 
-    doc.packs = packs;
-    doc.slot = slotObj;
-    doc.mode = "auto";
-    doc.force = "";
-    doc.ambulanceActive = false;
-    doc.ambulanceArm = "";
-    doc.ambulanceL1 = "";
-    doc.ambulanceL2 = "";
-    doc.v = Number(doc.v || 0) + 1;
-    doc.updated_at = now;
-    return;
-  }
+    // AUTO restore
+if (force === "" && !payload.sig) {
+  doc.mode = "auto";
+  doc.force = "";
+  doc.ambulanceActive = false;
+  doc.ambulanceArm = "";
+  doc.ambulanceL1 = "";
+  doc.ambulanceL2 = "";
+  doc.v = Number(doc.v || 0) + 1;
+  doc.updated_at = now;
+  return;
+}
 
   if (force === "ambulance") {
     const idx = clampSlot(Number(payload.amb_slot || 0));
