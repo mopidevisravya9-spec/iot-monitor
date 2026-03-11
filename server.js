@@ -28,15 +28,6 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "";
 // ======================
 // AIR QUALITY MEMORY
 // ======================
-
-let airData = {
-  co: 0,
-  co2: 0,
-  pm25: 0,
-  pm10: 0,
-  temp: 0,
-  hum: 0
-};
 function safeText(v) {
   return String(v || "").trim();
 }
@@ -794,19 +785,31 @@ app.get("/api/air/latest", (req, res) => {
 // ESP READ AIR DATA
 // ======================
 
-app.get("/api/air/push", (req, res) => {
+let airData = {
+  co: 0,
+  co2: 0,
+  pm25: 0,
+  pm10: 0,
+  temp: 0,
+  hum: 0
+};
 
-  airData.co = Number(req.query.co || 0);
-  airData.co2 = Number(req.query.co2 || 0);
-  airData.pm25 = Number(req.query.pm25 || 0);
-  airData.pm10 = Number(req.query.pm10 || 0);
-  airData.temp = Number(req.query.temp || 0);
-  airData.hum = Number(req.query.hum || 0);
+app.post("/api/air/update", (req, res) => {
 
-  console.log("Air Data Updated:", airData);
+  airData.co   = Number(req.body.co || 0);
+  airData.co2  = Number(req.body.co2 || 0);
+  airData.pm25 = Number(req.body.pm25 || 0);
+  airData.pm10 = Number(req.body.pm10 || 0);
+  airData.temp = Number(req.body.temp || 0);
+  airData.hum  = Number(req.body.hum || 0);
 
-  res.json({ ok: true, airData });
+  console.log("NEW AIR DATA:", airData);
 
+  res.json({ ok:true });
+});
+
+app.get("/api/air/latest", (req,res)=>{
+  res.json(airData);
 });
 // ======================
 // SENSOR SEND AIR DATA
