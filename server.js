@@ -788,7 +788,20 @@ function upsertLiveDevice(req, res) {
 // ESP READ AIR DATA
 // ======================
 
-app.get("/api/air/latest", (req, res) => {
+app.get("/api/air/push", (req, res) => {
+
+  airData.co = Number(req.query.co || 0);
+  airData.co2 = Number(req.query.co2 || 0);
+  airData.pm25 = Number(req.query.pm25 || 0);
+  airData.pm10 = Number(req.query.pm10 || 0);
+  airData.temp = Number(req.query.temp || 0);
+  airData.hum = Number(req.query.hum || 0);
+
+  console.log("Air Data Updated:", airData);
+
+  res.json({ ok: true, airData });
+
+});
 
   res.send(airData);
 
