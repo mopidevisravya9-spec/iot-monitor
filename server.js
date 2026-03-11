@@ -787,22 +787,21 @@ let airData = {
   temp: 0,
   hum: 0
 };
+app.post("/api/air/update",(req,res)=>{
 
-app.post("/api/air/update", (req, res) => {
+  airData.co   = req.body.co;
+  airData.co2  = req.body.co2;
+  airData.pm25 = req.body.pm25;
+  airData.pm10 = req.body.pm10;
+  airData.temp = req.body.temp;
+  airData.hum  = req.body.hum;
 
-  airData.co   = Number(req.body.co || 0);
-  airData.co2  = Number(req.body.co2 || 0);
-  airData.pm25 = Number(req.body.pm25 || 0);
-  airData.pm10 = Number(req.body.pm10 || 0);
-  airData.temp = Number(req.body.temp || 0);
-  airData.hum  = Number(req.body.hum || 0);
+  console.log("AIR DATA UPDATED",airData);
 
-  console.log("NEW AIR DATA:", airData);
-
-  res.json({ ok:true });
+  res.json({ok:true});
 });
 
-app.get("/api/air/latest", (req,res)=>{
+app.get("/api/air/latest",(req,res)=>{
   res.json(airData);
 });
 // ======================
