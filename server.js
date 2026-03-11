@@ -528,7 +528,7 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  const s = String(payload.sig || f || "red");
+  const s = String(payload.sig || force || "red");
   if (!signals.includes(s)) throw new Error("invalid sig");
 
   const sl = clampSlot(Number(payload.slot || 0));
@@ -544,8 +544,8 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
 
   doc.packs = packs;
   doc.slot = slotObj;
-  doc.mode = "force_" + f;
-  doc.force = f;
+  doc.mode = "force_" + force;
+  doc.force = force;
   doc.ambulanceActive = false;
   doc.ambulanceArm = "";
   doc.ambulanceL1 = "";
@@ -850,12 +850,6 @@ if (force === "") {
     const dev = getMergedDeviceById(targetValue);
     if (dev) targets = getDevicesByJunction(dev.junction_name);
   }
-
-  if (targetType === "junction") {
-    targets = getDevicesByJunction(targetValue);
-  }
-}
-
     // if user selected a junction
     if (targetType === "junction") {
         targets = getDevicesByJunction(targetValue);
