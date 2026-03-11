@@ -25,6 +25,18 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "";
 // ======================
 // HELPERS
 // ======================
+// ======================
+// AIR QUALITY MEMORY
+// ======================
+
+let airData = {
+  co: 0,
+  co2: 0,
+  pm25: 0,
+  pm10: 0,
+  temp: 0,
+  hum: 0
+};
 function safeText(v) {
   return String(v || "").trim();
 }
@@ -772,6 +784,33 @@ function upsertLiveDevice(req, res) {
     return res.status(500).json({ error: String(e.message || e) });
   }
 }
+// ======================
+// ESP READ AIR DATA
+// ======================
+
+app.get("/api/air/latest", (req, res) => {
+
+  res.send(airData);
+
+});
+// ======================
+// SENSOR SEND AIR DATA
+// ======================
+
+app.post("/api/air/push", (req, res) => {
+
+  airData.co = Number(req.body.co || 0);
+  airData.co2 = Number(req.body.co2 || 0);
+  airData.pm25 = Number(req.body.pm25 || 0);
+  airData.pm10 = Number(req.body.pm10 || 0);
+  airData.temp = Number(req.body.temp || 0);
+  airData.hum = Number(req.body.hum || 0);
+
+  console.log("Air Data Updated:", airData);
+
+  res.send("OK");
+
+});
 
 app.post("/register", upsertLiveDevice);
 app.post("/heartbeat", upsertLiveDevice);
