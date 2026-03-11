@@ -778,7 +778,6 @@ function upsertLiveDevice(req, res) {
 // ======================
 // ESP READ AIR DATA
 // ======================
-
 let airData = {
   co: 0,
   co2: 0,
@@ -788,31 +787,35 @@ let airData = {
   hum: 0
 };
 
-// helper to remove units like "ppm", "ug/m3"
 function extractNumber(v){
   if(v === undefined || v === null) return 0;
   const n = parseFloat(String(v).replace(/[^\d.-]/g,""));
   return isNaN(n) ? 0 : n;
 }
 
-// ESP sends sensor data here
-app.post("/api/air/update",(req,res)=>{
-
-  console.log("RAW BODY:", req.body);
-
-  airData.co   = extractNumber(req.body.co);
-  airData.co2  = extractNumber(req.body.co2);
-  airData.pm25 = extractNumber(req.body.pm25);
-  airData.pm10 = extractNumber(req.body.pm10);
-  airData.temp = extractNumber(req.body.temp);
-  airData.hum  = extractNumber(req.body.hum);
+function updateAir(data){
+  airData.co   = extractNumber(data.co);
+  airData.co2  = extractNumber(data.co2);
+  airData.pm25 = extractNumber(data.pm25);
+  airData.pm10 = extractNumber(data.pm10);
+  airData.temp = extractNumber(data.temp);
+  airData.hum  = extractNumber(data.hum);
 
   console.log("AIR DATA UPDATED:", airData);
+}
 
-  res.json({ ok:true });
+app.post("/api/air/update",(req,res)=>{
+  console.log("POST BODY:", req.body);
+  updateAir(req.body);
+  res.json({ok:true});
 });
 
-// ESP display reads latest data here
+app.get("/api/air/update",(req,res)=>{
+  console.log("GET QUERY:", req.query);
+  updateAir(req.query);
+  res.json({ok:true});
+});
+
 app.get("/api/air/latest",(req,res)=>{
   res.json(airData);
 });
