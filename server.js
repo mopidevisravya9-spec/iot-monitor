@@ -479,36 +479,23 @@ function writeCloudForDevice(dev, doc) {
 }
 
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
+
   const force = String(payload.force || "");
 
-  if (force === "" && payload.sig) {
-  const s = String(payload.sig || "red");
-    if (!signals.includes(s)) throw new Error("invalid sig");
+  // AUTO restore
+  if (force === "" && !payload.sig) {
+    doc.mode = "auto";
+    doc.force = "";
+    doc.ambulanceActive = false;
+    doc.ambulanceArm = "";
+    doc.ambulanceL1 = "";
+    doc.ambulanceL2 = "";
+    doc.v = Number(doc.v || 0) + 1;
+    doc.updated_at = now;
+    return;
+  }
 
-    const sl = clampSlot(Number(payload.slot || 0));
-    const l1 = String(payload.line1 || "");
-    const l2 = String(payload.line2 || "");
-
-    const packs = deepClone(doc.packs || defaultPacks());
-    packs[s] = normalizePack(packs[s]);
-    packs[s][sl] = { l1, l2 };
-
-    const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
-    slotObj[s] = sl;
-
-    // AUTO restore
-if (force === "" && !payload.sig) {
-  doc.mode = "auto";
-  doc.force = "";
-  doc.ambulanceActive = false;
-  doc.ambulanceArm = "";
-  doc.ambulanceL1 = "";
-  doc.ambulanceL2 = "";
-  doc.v = Number(doc.v || 0) + 1;
-  doc.updated_at = now;
-  return;
-}
-
+  // Ambulance mode
   if (force === "ambulance") {
     const idx = clampSlot(Number(payload.amb_slot || 0));
     const slogans = ambulanceSlogans();
@@ -523,37 +510,50 @@ if (force === "" && !payload.sig) {
       ? sourceRoad + " AMBULANCE COMING"
       : "AMBULANCE FROM " + sourceRoad;
     doc.ambulanceL2 = ambText;
+
     doc.v = Number(doc.v || 0) + 1;
     doc.updated_at = now;
     return;
   }
 
+  // Signal message editing
+  if (force === "" && payload.sig) {
+
+    const s = String(payload.sig || "red");
+    if (!signals.includes(s)) throw new Error("invalid sig");
+
+    const sl = clampSlot(Number(payload.slot || 0));
+    const l1 = String(payload.line1 || "");
+    const l2 = String(payload.line2 || "");
+
+    const packs = deepClone(doc.packs || defaultPacks());
+    packs[s] = normalizePack(packs[s]);
+    packs[s][sl] = { l1, l2 };
+
+    const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
+    slotObj[s] = sl;
+
+    doc.packs = packs;
+    doc.slot = slotObj;
+    doc.v = Number(doc.v || 0) + 1;
+    doc.updated_at = now;
+    return;
+  }
+
+  // Force signal
   const s = String(payload.sig || force || "red");
   if (!signals.includes(s)) throw new Error("invalid sig");
 
-  const sl = clampSlot(Number(payload.slot || 0));
-  const l1 = String(payload.line1 || "");
-  const l2 = String(payload.line2 || "");
-
-  const packs = deepClone(doc.packs || defaultPacks());
-  packs[s] = normalizePack(packs[s]);
-  packs[s][sl] = { l1, l2 };
-
-  const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
-  slotObj[s] = sl;
-
-  doc.packs = packs;
-  doc.slot = slotObj;
   doc.mode = "force_" + force;
   doc.force = force;
   doc.ambulanceActive = false;
   doc.ambulanceArm = "";
   doc.ambulanceL1 = "";
   doc.ambulanceL2 = "";
+
   doc.v = Number(doc.v || 0) + 1;
   doc.updated_at = now;
 }
-
 // ======================
 // KEEP ALIVE
 // ======================
