@@ -787,6 +787,12 @@ function upsertLiveDevice(req, res) {
 // ======================
 // ESP READ AIR DATA
 // ======================
+app.get("/api/air/latest", (req, res) => {
+  res.json(airData);
+});
+// ======================
+// ESP READ AIR DATA
+// ======================
 
 app.get("/api/air/push", (req, res) => {
 
