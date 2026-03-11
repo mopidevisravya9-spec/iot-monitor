@@ -842,11 +842,24 @@ app.post("/api/simple", requireAuth, (req, res) => {
       }
     }
     // When AUTO is sent after ambulance, restore whole junction
-     if (force === "" && payload.sig === undefined && targetType === "device") { 
-        const sourceDev = getMergedDeviceById(targetValue);
-     if (sourceDev) {
-        targets = getDevicesByJunction(sourceDev.junction_name);
+     // AUTO should restore whole junction
+// AUTO → restore whole junction
+if (force === "") {
+
+  if (targetType === "device") {
+    const dev = getMergedDeviceById(targetValue);
+    if (dev) targets = getDevicesByJunction(dev.junction_name);
   }
+
+  if (targetType === "junction") {
+    targets = getDevicesByJunction(targetValue);
+  }
+}
+
+    // if user selected a junction
+    if (targetType === "junction") {
+        targets = getDevicesByJunction(targetValue);
+    }
 }
     const uniqueByDevice = new Map();
     for (const dev of targets) uniqueByDevice.set(dev.device_id, dev);
@@ -1645,7 +1658,7 @@ function renderDashboardHTML() {
 
   showTab("map");
   loadDevices(true);
-  setInterval(() => loadDevices(false), 2000);
+  setInterval(() => loadDevices(false), 500);
   setInterval(() => { secureFetch("/api/session-check").catch(()=>{}); }, 30000);
 
   const img = document.getElementById("arcLogo");
