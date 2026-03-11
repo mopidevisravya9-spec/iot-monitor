@@ -481,8 +481,8 @@ function writeCloudForDevice(dev, doc) {
 function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const force = String(payload.force || "");
 
-  if (force === "") {
-    const s = String(payload.sig || "red");
+  if (force === "" && payload.sig) {
+  const s = String(payload.sig || "red");
     if (!signals.includes(s)) throw new Error("invalid sig");
 
     const sl = clampSlot(Number(payload.slot || 0));
