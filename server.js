@@ -779,12 +779,14 @@ function upsertLiveDevice(req, res) {
 // ESP READ AIR DATA
 // ======================
 let airData = {
+  device_id: "",
   co: 0,
   co2: 0,
   pm25: 0,
   pm10: 0,
   temp: 0,
-  hum: 0
+  hum: 0,
+  time: 0
 };
 
 function extractNumber(v){
@@ -794,14 +796,16 @@ function extractNumber(v){
 }
 
 function updateAir(data){
+  airData.device_id = data.device_id || "UNKNOWN_DEVICE";
   airData.co   = extractNumber(data.co);
   airData.co2  = extractNumber(data.co2);
   airData.pm25 = extractNumber(data.pm25);
   airData.pm10 = extractNumber(data.pm10);
   airData.temp = extractNumber(data.temp);
   airData.hum  = extractNumber(data.hum);
+  airData.time = Date.now();
 
-  console.log("AIR DATA UPDATED:", airData);
+  console.log("AIR DATA UPDATED FROM:", airData.device_id, airData);
 }
 
 app.post("/api/air/update",(req,res)=>{
