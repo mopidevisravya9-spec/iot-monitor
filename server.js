@@ -787,26 +787,35 @@ let airData = {
   temp: 0,
   hum: 0
 };
+
+// helper to remove units like "ppm", "ug/m3"
+function extractNumber(v){
+  if(v === undefined || v === null) return 0;
+  const n = parseFloat(String(v).replace(/[^\d.-]/g,""));
+  return isNaN(n) ? 0 : n;
+}
+
+// ESP sends sensor data here
 app.post("/api/air/update",(req,res)=>{
 
-  console.log("RAW BODY:",req.body);
+  console.log("RAW BODY:", req.body);
 
-  airData.co   = Number(req.body.co || 0);
-  airData.co2  = Number(req.body.co2 || 0);
-  airData.pm25 = Number(req.body.pm25 || 0);
-  airData.pm10 = Number(req.body.pm10 || 0);
-  airData.temp = Number(req.body.temp || 0);
-  airData.hum  = Number(req.body.hum || 0);
+  airData.co   = extractNumber(req.body.co);
+  airData.co2  = extractNumber(req.body.co2);
+  airData.pm25 = extractNumber(req.body.pm25);
+  airData.pm10 = extractNumber(req.body.pm10);
+  airData.temp = extractNumber(req.body.temp);
+  airData.hum  = extractNumber(req.body.hum);
 
-  console.log("AIR DATA UPDATED:",airData);
+  console.log("AIR DATA UPDATED:", airData);
 
-  res.json({ok:true});
+  res.json({ ok:true });
 });
 
+// ESP display reads latest data here
 app.get("/api/air/latest",(req,res)=>{
   res.json(airData);
 });
-
 
 app.post("/register", upsertLiveDevice);
 app.post("/heartbeat", upsertLiveDevice);
