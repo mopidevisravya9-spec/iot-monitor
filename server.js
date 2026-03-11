@@ -844,7 +844,7 @@ app.post("/api/simple", requireAuth, (req, res) => {
     // When AUTO is sent after ambulance, restore whole junction
      // AUTO should restore whole junction
 // AUTO → restore whole junction
-iif (force === "" && !payload.sig) { {
+if (force === "" && !payload.sig)  {
 
   if (targetType === "device") {
     const dev = getMergedDeviceById(targetValue);
