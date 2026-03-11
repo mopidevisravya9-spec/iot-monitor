@@ -802,10 +802,6 @@ app.get("/api/air/push", (req, res) => {
   res.json({ ok: true, airData });
 
 });
-
-  res.send(airData);
-
-});
 // ======================
 // SENSOR SEND AIR DATA
 // ======================
