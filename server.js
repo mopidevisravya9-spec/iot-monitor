@@ -928,48 +928,7 @@ app.get("/api/pull/:device_id", (req, res) => {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
-app.post("/sensor-alert", (req, res) => {
-  try {
-
-    const body = req.body || {};
-    const device = String(body.device_id || "AIR_NODE");
-    const msg = String(body.message || "Air quality alert");
-
-    console.log("Sensor alert:", device, msg);
-
-    const targets = allDevicesMerged();
-
-    const now = Date.now();
-
-    targets.forEach(dev => {
-
-      const doc = ensureCloudForDevice(dev);
-
-      doc.mode = "force_red";
-      doc.force = "red";
-
-      doc.packs.red[0] = {
-        l1: "AIR POLLUTION ALERT",
-        l2: msg
-      };
-
-      doc.slot.red = 0;
-
-      doc.v = Number(doc.v || 0) + 1;
-      doc.updated_at = now;
-
-      writeCloudForDevice(dev, doc);
-
-    });
-
-    saveState();
-
-    res.json({ ok:true });
-
-  } catch(e) {
-    res.status(500).json({ error:String(e.message || e) });
-  }
-});
+let LAST_AIR_DATA = {};
 
 app.post("/airdata", (req, res) => {
 
@@ -980,17 +939,25 @@ app.post("/airdata", (req, res) => {
     const device = String(body.device_id || "AIR_NODE");
     const data = String(body.data || "");
 
+    LAST_AIR_DATA = {
+      device_id: device,
+      values: data,
+      time: Date.now()
+    };
+
     console.log("Air data received from:", device);
     console.log("Values:", data);
 
     res.json({ ok: true });
 
   } catch(e) {
-
     res.status(500).json({ error: String(e.message || e) });
-
   }
 
+});
+
+app.get("/airdata", (req, res) => {
+  res.json(LAST_AIR_DATA);
 });
 // ======================
 // DASHBOARD HTML
