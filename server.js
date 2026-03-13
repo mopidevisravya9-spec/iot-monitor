@@ -25,6 +25,9 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "";
 // ======================
 // HELPERS
 // ======================
+// ======================
+// AIR QUALITY MEMORY
+// ======================
 function safeText(v) {
   return String(v || "").trim();
 }
@@ -544,8 +547,8 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
   const s = String(payload.sig || force || "red");
   if (!signals.includes(s)) throw new Error("invalid sig");
 
-  doc.mode = "force_" + s;
-  doc.force = s;
+  doc.mode = "force_" + force;
+  doc.force = force;
   doc.ambulanceActive = false;
   doc.ambulanceArm = "";
   doc.ambulanceL1 = "";
@@ -772,6 +775,54 @@ function upsertLiveDevice(req, res) {
     return res.status(500).json({ error: String(e.message || e) });
   }
 }
+// ======================
+// ESP READ AIR DATA
+// ======================
+let airData = {
+  device_id: "",
+  co: 0,
+  co2: 0,
+  pm25: 0,
+  pm10: 0,
+  temp: 0,
+  hum: 0,
+  time: 0
+};
+
+function extractNumber(v){
+  if(v === undefined || v === null) return 0;
+  const n = parseFloat(String(v).replace(/[^\d.-]/g,""));
+  return isNaN(n) ? 0 : n;
+}
+
+function updateAir(data){
+  airData.device_id = data.device_id || "UNKNOWN_DEVICE";
+  airData.co   = extractNumber(data.co);
+  airData.co2  = extractNumber(data.co2);
+  airData.pm25 = extractNumber(data.pm25);
+  airData.pm10 = extractNumber(data.pm10);
+  airData.temp = extractNumber(data.temp);
+  airData.hum  = extractNumber(data.hum);
+  airData.time = Date.now();
+
+  console.log("AIR DATA UPDATED FROM:", airData.device_id, airData);
+}
+
+app.post("/api/air/update",(req,res)=>{
+  console.log("POST BODY:", req.body);
+  updateAir(req.body);
+  res.json({ok:true});
+});
+
+app.get("/api/air/update",(req,res)=>{
+  console.log("GET QUERY:", req.query);
+  updateAir(req.query);
+  res.json({ok:true});
+});
+
+app.get("/api/air/latest",(req,res)=>{
+  res.json(airData);
+});
 
 app.post("/register", upsertLiveDevice);
 app.post("/heartbeat", upsertLiveDevice);
