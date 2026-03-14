@@ -928,7 +928,37 @@ app.get("/api/pull/:device_id", (req, res) => {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
+let LAST_AIR_DATA = {};
 
+app.post("/airdata", (req, res) => {
+
+  try {
+
+    const body = req.body || {};
+
+    const device = String(body.device_id || "AIR_NODE");
+    const data = String(body.data || "");
+
+    LAST_AIR_DATA = {
+      device_id: device,
+      values: data,
+      time: Date.now()
+    };
+
+    console.log("Air data received from:", device);
+    console.log("Values:", data);
+
+    res.json({ ok: true });
+
+  } catch(e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+
+});
+
+app.get("/airdata", (req, res) => {
+  res.json(LAST_AIR_DATA);
+});
 // ======================
 // DASHBOARD HTML
 // ======================
