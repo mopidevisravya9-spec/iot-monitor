@@ -516,29 +516,29 @@ function applyMessageToDevice(doc, dev, payload, now, isSourceDevice = true) {
     return;
   }
 
-  // Signal message editing
-  if (force === "" && payload.sig) {
+  // Signal message editing (FIXED)
+if (payload.sig && payload.line1 !== undefined) {
 
-    const s = String(payload.sig || "red");
-    if (!signals.includes(s)) throw new Error("invalid sig");
+  const s = String(payload.sig || "red");
+  if (!signals.includes(s)) throw new Error("invalid sig");
 
-    const sl = clampSlot(Number(payload.slot || 0));
-    const l1 = String(payload.line1 || "");
-    const l2 = String(payload.line2 || "");
+  const sl = clampSlot(Number(payload.slot || 0));
+  const l1 = String(payload.line1 || "");
+  const l2 = String(payload.line2 || "");
 
-    const packs = deepClone(doc.packs || defaultPacks());
-    packs[s] = normalizePack(packs[s]);
-    packs[s][sl] = { l1, l2 };
+  const packs = deepClone(doc.packs || defaultPacks());
+  packs[s] = normalizePack(packs[s]);
+  packs[s][sl] = { l1, l2 };
 
-    const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
-    slotObj[s] = sl;
+  const slotObj = { ...(doc.slot || { red: 0, amber: 0, green: 0, no: 0 }) };
+  slotObj[s] = sl;
 
-    doc.packs = packs;
-    doc.slot = slotObj;
-    doc.v = Number(doc.v || 0) + 1;
-    doc.updated_at = now;
-    return;
-  }
+  doc.packs = packs;
+  doc.slot = slotObj;
+  doc.v = Number(doc.v || 0) + 1;
+  doc.updated_at = now;
+  return;
+}
 
   // Force signal
   const s = String(payload.sig || force || "red");
